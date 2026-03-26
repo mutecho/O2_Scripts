@@ -1,0 +1,8 @@
+file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0145825184_tf0000306692_epn206/001/AO2D.root
+file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0143621120_tf0000237815_epn266/007/AO2D.root
+file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0145772576_tf0000305048_epn008/003/AO2D.root
+file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0142555072_tf0000204501_epn238/005/AO2D.root
+file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0143592832_tf0000236931_epn333/006/AO2D.root
+file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0143580000_tf0000236530_epn276/005/AO2D.root
+file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0145791872_tf0000305651_epn055/009/AO2D.root
+file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0146964128_tf0000342284_epn018/006/AO2D.root

@@ -1,0 +1,11 @@
+.DS_Store
+.vscode/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.root
+*.onnx
+core_dump_*
+imgui.ini
+*.log
+stdout.log

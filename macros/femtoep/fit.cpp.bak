@@ -1,0 +1,359 @@
+#if 0
+// Backup of the original traversal-based fit entry points.
+// These versions iterate over all `*_CF3D` histograms found in an existing
+// ROOT file and fit everything in one pass.
+// They depend on helper functions/types that live in 3d_cf_from_exp.cpp.
+
+void FitCF3DWithLevy(const string &rpath, const string &rfilename,
+                     const string &wpath, const string &wfilename,
+                     const string &txtFilename, double fitQMax = 0.15) {
+  const bool oldAddDirectory = TH1::AddDirectoryStatus();
+  TH1::AddDirectory(kFALSE);
+
+  auto rf = GetROOT(rpath, rfilename, "read");
+  if (!InitializeROOTFile(wpath, wfilename)) {
+    if (rf) {
+      rf->Close();
+      delete rf;
+    }
+    TH1::AddDirectory(oldAddDirectory);
+    return;
+  }
+
+  if (!rf || rf->IsZombie()) {
+    cout << "ERROR: cannot open input ROOT file " << rpath << "/" << rfilename
+         << ".root" << endl;
+    delete rf;
+    TH1::AddDirectory(oldAddDirectory);
+    return;
+  }
+
+  vector<Levy3DFitResult> fitResults;
+  TIter nextKey(rf->GetListOfKeys());
+  TKey *key = nullptr;
+
+  while ((key = (TKey *)nextKey())) {
+    string objectName = key->GetName();
+    if (!EndsWith(objectName, "_CF3D")) {
+      continue;
+    }
+
+    auto hCF = dynamic_cast<TH3D *>(rf->Get(objectName.c_str()));
+    if (!hCF) {
+      continue;
+    }
+
+    auto hCFClone = (TH3D *)hCF->Clone((objectName + "_data3d").c_str());
+    hCFClone->SetDirectory(nullptr);
+
+    Levy3DFitResult fitResult;
+    if (!ParseCF3DHistogramName(objectName, fitResult)) {
+      cout << "WARNING: cannot parse histogram name: " << objectName << endl;
+      delete hCFClone;
+      continue;
+    }
+
+    cout << "Fitting " << objectName << endl;
+    fitResult.fitModel = "diag";
+
+    auto fitFunc = BuildLevyFitFunction(objectName + "_levy3d_fit", fitQMax);
+    auto fitStatus = hCFClone->Fit(fitFunc, "RSMNQ0");
+
+    fitResult.norm = fitFunc->GetParameter(0);
+    fitResult.normErr = fitFunc->GetParError(0);
+    fitResult.lambda = fitFunc->GetParameter(1);
+    fitResult.lambdaErr = fitFunc->GetParError(1);
+    fitResult.rout2 = fitFunc->GetParameter(2);
+    fitResult.rout2Err = fitFunc->GetParError(2);
+    fitResult.rside2 = fitFunc->GetParameter(3);
+    fitResult.rside2Err = fitFunc->GetParError(3);
+    fitResult.rlong2 = fitFunc->GetParameter(4);
+    fitResult.rlong2Err = fitFunc->GetParError(4);
+    fitResult.alpha = fitFunc->GetParameter(5);
+    fitResult.alphaErr = fitFunc->GetParError(5);
+    fitResult.chi2 = fitFunc->GetChisquare();
+    fitResult.ndf = fitFunc->GetNDF();
+    fitResult.status = static_cast<int>(fitStatus);
+    fitResults.push_back(fitResult);
+
+    auto hFit3D =
+        BuildFittedHistogramLike(hCFClone, fitFunc, objectName + "_fit3d");
+
+    auto hProjXData = BuildProjectionXWithinWindow(
+        hCFClone, objectName + "_data_ProjX", fitQMax);
+    auto hProjYData = BuildProjectionYWithinWindow(
+        hCFClone, objectName + "_data_ProjY", fitQMax);
+    auto hProjZData = BuildProjectionZWithinWindow(
+        hCFClone, objectName + "_data_ProjZ", fitQMax);
+
+    auto hProjXFit = BuildProjectionXWithinWindow(
+        hFit3D, objectName + "_fit_ProjX", fitQMax);
+    auto hProjYFit = BuildProjectionYWithinWindow(
+        hFit3D, objectName + "_fit_ProjY", fitQMax);
+    auto hProjZFit = BuildProjectionZWithinWindow(
+        hFit3D, objectName + "_fit_ProjZ", fitQMax);
+
+    auto cProjX = BuildProjectionCanvas(
+        objectName + "_canvas_ProjX", hProjXData, hProjXFit, "q_{out} (GeV/c)");
+    auto cProjY =
+        BuildProjectionCanvas(objectName + "_canvas_ProjY", hProjYData,
+                              hProjYFit, "q_{side} (GeV/c)");
+    auto cProjZ =
+        BuildProjectionCanvas(objectName + "_canvas_ProjZ", hProjZData,
+                              hProjZFit, "q_{long} (GeV/c)");
+    auto c3D =
+        Build3DComparisonCanvas(objectName + "_canvas_3D", hCFClone, hFit3D);
+
+    auto wf = GetROOT(wpath, wfilename, "update");
+    if (!wf || wf->IsZombie()) {
+      cout << "ERROR: cannot update output ROOT file " << wpath << "/"
+           << wfilename << ".root" << endl;
+      delete wf;
+      delete cProjX;
+      delete cProjY;
+      delete cProjZ;
+      delete c3D;
+      delete hProjXData;
+      delete hProjYData;
+      delete hProjZData;
+      delete hProjXFit;
+      delete hProjYFit;
+      delete hProjZFit;
+      delete hFit3D;
+      delete fitFunc;
+      delete hCFClone;
+      continue;
+    }
+
+    auto dir = wf->mkdir(objectName.c_str());
+    dir->cd();
+
+    hCFClone->Write();
+    fitFunc->Write();
+    hFit3D->Write();
+    hProjXData->Write();
+    hProjYData->Write();
+    hProjZData->Write();
+    hProjXFit->Write();
+    hProjYFit->Write();
+    hProjZFit->Write();
+    cProjX->Write();
+    cProjY->Write();
+    cProjZ->Write();
+    c3D->Write();
+
+    delete cProjX;
+    delete cProjY;
+    delete cProjZ;
+    delete c3D;
+    delete hProjXData;
+    delete hProjYData;
+    delete hProjZData;
+    delete hProjXFit;
+    delete hProjYFit;
+    delete hProjZFit;
+    delete hFit3D;
+    delete fitFunc;
+    delete hCFClone;
+    wf->Close();
+    delete wf;
+  }
+
+  auto wf = GetROOT(wpath, wfilename, "update");
+  if (!wf || wf->IsZombie()) {
+    cout << "ERROR: cannot update output ROOT file " << wpath << "/"
+         << wfilename << ".root for summary graphs" << endl;
+    delete wf;
+  } else {
+    WriteR2Graphs(wf, fitResults);
+    wf->Close();
+    delete wf;
+  }
+  WriteFitResultsSummary(wpath + "/" + txtFilename + ".txt", fitResults);
+
+  rf->Close();
+  delete rf;
+  TH1::AddDirectory(oldAddDirectory);
+}
+
+void FitCF3DWithFullLevy(const string &rpath, const string &rfilename,
+                         const string &wpath, const string &wfilename,
+                         const string &txtFilename, double fitQMax = 0.15) {
+  const bool oldAddDirectory = TH1::AddDirectoryStatus();
+  TH1::AddDirectory(kFALSE);
+
+  auto rf = GetROOT(rpath, rfilename, "read");
+  if (!InitializeROOTFile(wpath, wfilename)) {
+    if (rf) {
+      rf->Close();
+      delete rf;
+    }
+    TH1::AddDirectory(oldAddDirectory);
+    return;
+  }
+
+  if (!rf || rf->IsZombie()) {
+    cout << "ERROR: cannot open input ROOT file " << rpath << "/" << rfilename
+         << ".root" << endl;
+    delete rf;
+    TH1::AddDirectory(oldAddDirectory);
+    return;
+  }
+
+  vector<Levy3DFitResult> fitResults;
+  TIter nextKey(rf->GetListOfKeys());
+  TKey *key = nullptr;
+
+  while ((key = (TKey *)nextKey())) {
+    string objectName = key->GetName();
+    if (!EndsWith(objectName, "_CF3D")) {
+      continue;
+    }
+
+    auto hCF = dynamic_cast<TH3D *>(rf->Get(objectName.c_str()));
+    if (!hCF) {
+      continue;
+    }
+
+    auto hCFClone = (TH3D *)hCF->Clone((objectName + "_data3d").c_str());
+    hCFClone->SetDirectory(nullptr);
+
+    Levy3DFitResult fitResult;
+    if (!ParseCF3DHistogramName(objectName, fitResult)) {
+      cout << "WARNING: cannot parse histogram name: " << objectName << endl;
+      delete hCFClone;
+      continue;
+    }
+
+    cout << "Fitting full Levy model for " << objectName << endl;
+    fitResult.fitModel = "full";
+    fitResult.hasOffDiagonal = true;
+
+    auto fitFunc =
+        BuildFullLevyFitFunction(objectName + "_levy3d_full_fit", fitQMax);
+    auto fitStatus = hCFClone->Fit(fitFunc, "RSMNQ0");
+
+    fitResult.norm = fitFunc->GetParameter(0);
+    fitResult.normErr = fitFunc->GetParError(0);
+    fitResult.lambda = fitFunc->GetParameter(1);
+    fitResult.lambdaErr = fitFunc->GetParError(1);
+    fitResult.rout2 = fitFunc->GetParameter(2);
+    fitResult.rout2Err = fitFunc->GetParError(2);
+    fitResult.rside2 = fitFunc->GetParameter(3);
+    fitResult.rside2Err = fitFunc->GetParError(3);
+    fitResult.rlong2 = fitFunc->GetParameter(4);
+    fitResult.rlong2Err = fitFunc->GetParError(4);
+    fitResult.routside2 = fitFunc->GetParameter(5);
+    fitResult.routside2Err = fitFunc->GetParError(5);
+    fitResult.routlong2 = fitFunc->GetParameter(6);
+    fitResult.routlong2Err = fitFunc->GetParError(6);
+    fitResult.rsidelong2 = fitFunc->GetParameter(7);
+    fitResult.rsidelong2Err = fitFunc->GetParError(7);
+    fitResult.alpha = fitFunc->GetParameter(8);
+    fitResult.alphaErr = fitFunc->GetParError(8);
+    fitResult.chi2 = fitFunc->GetChisquare();
+    fitResult.ndf = fitFunc->GetNDF();
+    fitResult.status = static_cast<int>(fitStatus);
+    fitResults.push_back(fitResult);
+
+    auto hFit3D =
+        BuildFittedHistogramLike(hCFClone, fitFunc, objectName + "_full_fit3d");
+
+    auto hProjXData = BuildProjectionXWithinWindow(
+        hCFClone, objectName + "_data_ProjX", fitQMax);
+    auto hProjYData = BuildProjectionYWithinWindow(
+        hCFClone, objectName + "_data_ProjY", fitQMax);
+    auto hProjZData = BuildProjectionZWithinWindow(
+        hCFClone, objectName + "_data_ProjZ", fitQMax);
+
+    auto hProjXFit = BuildProjectionXWithinWindow(
+        hFit3D, objectName + "_full_fit_ProjX", fitQMax);
+    auto hProjYFit = BuildProjectionYWithinWindow(
+        hFit3D, objectName + "_full_fit_ProjY", fitQMax);
+    auto hProjZFit = BuildProjectionZWithinWindow(
+        hFit3D, objectName + "_full_fit_ProjZ", fitQMax);
+
+    auto cProjX =
+        BuildProjectionCanvas(objectName + "_canvas_full_ProjX", hProjXData,
+                              hProjXFit, "q_{out} (GeV/c)");
+    auto cProjY =
+        BuildProjectionCanvas(objectName + "_canvas_full_ProjY", hProjYData,
+                              hProjYFit, "q_{side} (GeV/c)");
+    auto cProjZ =
+        BuildProjectionCanvas(objectName + "_canvas_full_ProjZ", hProjZData,
+                              hProjZFit, "q_{long} (GeV/c)");
+    auto c3D = Build3DComparisonCanvas(objectName + "_canvas_full_3D", hCFClone,
+                                       hFit3D);
+
+    auto wf = GetROOT(wpath, wfilename, "update");
+    if (!wf || wf->IsZombie()) {
+      cout << "ERROR: cannot update output ROOT file " << wpath << "/"
+           << wfilename << ".root" << endl;
+      delete wf;
+      delete cProjX;
+      delete cProjY;
+      delete cProjZ;
+      delete c3D;
+      delete hProjXData;
+      delete hProjYData;
+      delete hProjZData;
+      delete hProjXFit;
+      delete hProjYFit;
+      delete hProjZFit;
+      delete hFit3D;
+      delete fitFunc;
+      delete hCFClone;
+      continue;
+    }
+
+    auto dir = wf->mkdir(objectName.c_str());
+    dir->cd();
+
+    hCFClone->Write();
+    fitFunc->Write();
+    hFit3D->Write();
+    hProjXData->Write();
+    hProjYData->Write();
+    hProjZData->Write();
+    hProjXFit->Write();
+    hProjYFit->Write();
+    hProjZFit->Write();
+    cProjX->Write();
+    cProjY->Write();
+    cProjZ->Write();
+    c3D->Write();
+
+    delete cProjX;
+    delete cProjY;
+    delete cProjZ;
+    delete c3D;
+    delete hProjXData;
+    delete hProjYData;
+    delete hProjZData;
+    delete hProjXFit;
+    delete hProjYFit;
+    delete hProjZFit;
+    delete hFit3D;
+    delete fitFunc;
+    delete hCFClone;
+    wf->Close();
+    delete wf;
+  }
+
+  auto wf = GetROOT(wpath, wfilename, "update");
+  if (!wf || wf->IsZombie()) {
+    cout << "ERROR: cannot update output ROOT file " << wpath << "/"
+         << wfilename << ".root for summary graphs" << endl;
+    delete wf;
+  } else {
+    WriteR2Graphs(wf, fitResults);
+    wf->Close();
+    delete wf;
+  }
+  WriteFitResultsSummary(wpath + "/" + txtFilename + ".txt", fitResults);
+
+  rf->Close();
+  delete rf;
+  TH1::AddDirectory(oldAddDirectory);
+}
+#endif

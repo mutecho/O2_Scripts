@@ -1,0 +1,31 @@
+Selection: Sign of the track - (-1 1 )
+ > 1
+Selection: Minimal pT (GeV/c) - (0.5 )
+ > 0.5
+Selection: Maximal pT (GeV/c) - (4 )
+ > 4
+Selection: Maximal eta - (0.8 )
+ > 0.8
+Selection: Minimum number of TPC clusters - (70 )
+ > 70
+Selection: Minimum fraction of crossed rows/findable clusters - (0.83 )
+ > 0.83
+Selection: Minimum number of crossed TPC rows - (70 )
+ > 70
+Selection: Maximal number of shared TPC cluster - (160 )
+ > 160
+Selection: Minimum number of ITS clusters - (-1 )
+ > -1
+Selection: Minimum number of ITS clusters in the inner barrel - (-1 )
+ > -1
+Selection: Maximal DCA_xy (cm) - (3.5 )
+ > 3.5
+Selection: Maximal DCA_z (cm) - (0.2 )
+ > 0.2
++++++++++++++++++++++++++++++++++
+CutCulator has spoken - your selection bit is
+00000000000000000001100111111110 (bitwise)
+6654 (number representation)
++++++++++++++++++++++++++++++++++
+PID bits for these species are available:
+Activate ITS PID (only valid for tracks)? (y/n)
