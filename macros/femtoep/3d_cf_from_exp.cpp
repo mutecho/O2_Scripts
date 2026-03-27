@@ -38,6 +38,8 @@ struct EPBin {
   string name;
 };
 
+constexpr double kProjection1DWindow = 0.04;
+
 bool FileExists_bool(const string &filename) {
   ifstream file(filename);
   return file.good();
@@ -326,31 +328,39 @@ TH1D *calc_cf_from_sme_rerange(TH1D *h_se, TH1D *h_me,
   return h_cf_re;
 }
 
-void Write1DProjections(TH3D *hCF, TFile *wf, const string &baseName) {
-  auto hProjX = hCF->ProjectionX();
-  auto hProjY = hCF->ProjectionY();
-  auto hProjZ = hCF->ProjectionZ();
+TH1D *BuildProjectionXWithinWindow(TH3D *hist, const string &name, double qMax);
+TH1D *BuildProjectionYWithinWindow(TH3D *hist, const string &name, double qMax);
+TH1D *BuildProjectionZWithinWindow(TH3D *hist, const string &name, double qMax);
+
+void Write1DProjections(TH3D *hCF, TDirectory *dir, const string &baseName,
+                        const string &yTitle = "C(q)") {
+  auto hProjX = BuildProjectionXWithinWindow(hCF, baseName + "_ProjX",
+                                             kProjection1DWindow);
+  auto hProjY = BuildProjectionYWithinWindow(hCF, baseName + "_ProjY",
+                                             kProjection1DWindow);
+  auto hProjZ = BuildProjectionZWithinWindow(hCF, baseName + "_ProjZ",
+                                             kProjection1DWindow);
 
   string hProjXName = baseName + "_ProjX";
   hProjX->SetName(hProjXName.c_str());
   hProjX->SetTitle(hProjXName.c_str());
   hProjX->GetXaxis()->SetTitle("q_{out} (GeV/c)");
-  hProjX->GetYaxis()->SetTitle("C(q)");
-  wf->WriteObject(hProjX, hProjXName.c_str());
+  hProjX->GetYaxis()->SetTitle(yTitle.c_str());
+  dir->WriteObject(hProjX, hProjXName.c_str());
 
   string hProjYName = baseName + "_ProjY";
   hProjY->SetName(hProjYName.c_str());
   hProjY->SetTitle(hProjYName.c_str());
   hProjY->GetXaxis()->SetTitle("q_{side} (GeV/c)");
-  hProjY->GetYaxis()->SetTitle("C(q)");
-  wf->WriteObject(hProjY, hProjYName.c_str());
+  hProjY->GetYaxis()->SetTitle(yTitle.c_str());
+  dir->WriteObject(hProjY, hProjYName.c_str());
 
   string hProjZName = baseName + "_ProjZ";
   hProjZ->SetName(hProjZName.c_str());
   hProjZ->SetTitle(hProjZName.c_str());
   hProjZ->GetXaxis()->SetTitle("q_{long} (GeV/c)");
-  hProjZ->GetYaxis()->SetTitle("C(q)");
-  wf->WriteObject(hProjZ, hProjZName.c_str());
+  hProjZ->GetYaxis()->SetTitle(yTitle.c_str());
+  dir->WriteObject(hProjZ, hProjZName.c_str());
 
   delete hProjX;
   delete hProjY;
@@ -393,6 +403,8 @@ void CFCalc3D(string rpath, string rfilename, string taskname,
   }
   auto hSE_sparse = (THnSparseF *)hSE_sparse_origin->Clone();
   auto hME_sparse = (THnSparseF *)hME_sparse_origin->Clone();
+  hSE_sparse->Sumw2();
+  hME_sparse->Sumw2();
 
   auto ax_phi = hSE_sparse->GetAxis(6);
   int nPhiBins = ax_phi->GetNbins();
@@ -414,6 +426,17 @@ void CFCalc3D(string rpath, string rfilename, string taskname,
 
       hME_sparse->GetAxis(4)->SetRangeUser(centLow, centHigh);
       hME_sparse->GetAxis(3)->SetRangeUser(mTLow, mTHigh);
+      hME_sparse->GetAxis(6)->SetRange(0, 0);
+
+      auto hME_norm = (TH3D *)hME_sparse->Projection(0, 1, 2);
+      hME_norm->SetDirectory(nullptr);
+      const double intME = hME_norm->Integral("width");
+      if (intME == 0.0) {
+        cout << "WARNING: zero mixed-event integral for " << baseName << endl;
+        delete hME_norm;
+        continue;
+      }
+      hME_norm->Scale(1.0 / intME);
 
       // 遍历 pair-phi bin（只取一半，做 folding）
       for (int i = 1; i <= nPhiBins; ++i) {
@@ -431,46 +454,45 @@ void CFCalc3D(string rpath, string rfilename, string taskname,
         // -------- SE --------
         hSE_sparse->GetAxis(6)->SetRange(i, i);
         auto hSE_a = (TH3D *)hSE_sparse->Projection(0, 1, 2);
+        hSE_a->SetDirectory(nullptr);
 
         hSE_sparse->GetAxis(6)->SetRange(j, j);
         auto hSE_b = (TH3D *)hSE_sparse->Projection(0, 1, 2);
+        hSE_b->SetDirectory(nullptr);
 
         hSE_a->Add(hSE_b);
 
-        // -------- ME --------
-        hME_sparse->GetAxis(6)->SetRange(i, i);
-        auto hME_a = (TH3D *)hME_sparse->Projection(0, 1, 2);
-
-        hME_sparse->GetAxis(6)->SetRange(j, j);
-        auto hME_b = (TH3D *)hME_sparse->Projection(0, 1, 2);
-
-        hME_a->Add(hME_b);
-
         // -------- 归一化（关键：分别归一）--------
-        double intSE = hSE_a->Integral();
-        double intME = hME_a->Integral();
+        double intSE = hSE_a->Integral("width");
 
-        if (intSE == 0 || intME == 0) {
+        if (intSE == 0.0) {
           cout << "WARNING: zero integral, skip bin " << i << endl;
           delete hSE_a;
           delete hSE_b;
-          delete hME_a;
-          delete hME_b;
           continue;
         }
 
         hSE_a->Scale(1.0 / intSE);
-        hME_a->Scale(1.0 / intME);
-
-        // -------- CF --------
-        auto hCF = (TH3D *)hSE_a->Clone();
-        hCF->Divide(hME_a);
 
         // -------- 命名 --------
         double phi_mapped = phi; // 对应 [-pi/2, pi/2] 的正半区
 
         string hname =
             baseName + "_phi=" + doubleToString(phi_mapped, 2) + "_CF3D";
+        string hSEName = hname + "_SE_norm3d";
+        string hMEName = hname + "_ME_norm3d";
+
+        hSE_a->SetName(hSEName.c_str());
+        hSE_a->SetTitle(hSEName.c_str());
+
+        auto hMEStored = (TH3D *)hME_norm->Clone(hMEName.c_str());
+        hMEStored->SetDirectory(nullptr);
+        hMEStored->SetTitle(hMEName.c_str());
+
+        // -------- CF --------
+        auto hCF = (TH3D *)hSE_a->Clone(hname.c_str());
+        hCF->SetDirectory(nullptr);
+        hCF->Divide(hMEStored);
 
         hCF->SetName(hname.c_str());
         hCF->SetTitle(hname.c_str());
@@ -485,24 +507,32 @@ void CFCalc3D(string rpath, string rfilename, string taskname,
                << wfilename << ".root" << endl;
           delete wf;
           delete hCF;
+          delete hMEStored;
           delete hSE_a;
           delete hSE_b;
-          delete hME_a;
-          delete hME_b;
           continue;
         }
 
-        wf->WriteObject(hCF, hname.c_str());
-        Write1DProjections(hCF, wf, hname);
+        auto dir = wf->GetDirectory(hname.c_str());
+        if (!dir) {
+          dir = wf->mkdir(hname.c_str());
+        }
+        dir->WriteObject(hSE_a, hSEName.c_str());
+        Write1DProjections(hSE_a, dir, hSEName, "Normalized density");
+        dir->WriteObject(hMEStored, hMEName.c_str());
+        Write1DProjections(hMEStored, dir, hMEName, "Normalized density");
+        dir->WriteObject(hCF, hname.c_str());
+        Write1DProjections(hCF, dir, hname, "C(q)");
         wf->Close();
         delete wf;
 
         delete hCF;
+        delete hMEStored;
         delete hSE_a;
         delete hSE_b;
-        delete hME_a;
-        delete hME_b;
       }
+
+      delete hME_norm;
     }
   }
 
@@ -510,6 +540,8 @@ void CFCalc3D(string rpath, string rfilename, string taskname,
   delete hSE_sparse;
   delete hME_sparse;
   delete rf;
+  cout << "3D CF results have been written to " << wpath << "/" << wfilename
+       << ".root" << endl;
   TH1::AddDirectory(oldAddDirectory);
 }
 
@@ -544,7 +576,18 @@ struct Levy3DFitResult {
   int ndf = 0;
   int status = -1;
   bool hasOffDiagonal = false;
+  bool usesCoulomb = false;
+  bool usesCoreHaloLambda = true;
 };
+
+struct Levy3DFitOptions {
+  bool useCoulomb = false;
+  bool useCoreHaloLambda = true;
+  double fitQMax = 0.15;
+};
+
+constexpr double kHbarC = 0.1973269804;
+constexpr double kPiPiLikeSignBohrRadiusFm = 387.5;
 
 bool EndsWith(const string &value, const string &suffix) {
   if (value.size() < suffix.size()) {
@@ -579,9 +622,77 @@ bool ParseCF3DHistogramName(const string &histName, Levy3DFitResult &result) {
   return true;
 }
 
-double Levy3DModel(double *x, double *par) {
-  constexpr double kHbarC = 0.1973269804;
+TH3D *LoadStoredCFHistogram(TFile *rf, const string &objectName) {
+  if (!rf) {
+    return nullptr;
+  }
 
+  if (auto hCF = dynamic_cast<TH3D *>(rf->Get(objectName.c_str()))) {
+    auto hClone = (TH3D *)hCF->Clone((objectName + "_data3d").c_str());
+    hClone->SetDirectory(nullptr);
+    return hClone;
+  }
+
+  auto dir = dynamic_cast<TDirectory *>(rf->Get(objectName.c_str()));
+  if (!dir) {
+    return nullptr;
+  }
+
+  auto hCF = dynamic_cast<TH3D *>(dir->Get(objectName.c_str()));
+  if (!hCF) {
+    return nullptr;
+  }
+
+  auto hClone = (TH3D *)hCF->Clone((objectName + "_data3d").c_str());
+  hClone->SetDirectory(nullptr);
+  return hClone;
+}
+
+string BuildFitOptionTag(const Levy3DFitOptions &options) {
+  return string(options.useCoreHaloLambda ? "lam" : "nolam") + "_" +
+         (options.useCoulomb ? "coul" : "nocoul");
+}
+
+double ComputeLikeSignPiPiGamowFactor(double qOut, double qSide, double qLong) {
+  const double qMagnitude = std::sqrt(qOut * qOut + qSide * qSide +
+                                      qLong * qLong); // Approximate q_inv.
+  const double kStarFm = 0.5 * qMagnitude / kHbarC;
+  if (kStarFm <= 1e-12) {
+    return 0.0;
+  }
+
+  const double eta = 1.0 / (kStarFm * kPiPiLikeSignBohrRadiusFm);
+  const double twoPiEta = 2.0 * TMath::Pi() * eta;
+  if (twoPiEta > 700.0) {
+    return 0.0;
+  }
+
+  const double denominator = std::exp(twoPiEta) - 1.0;
+  if (denominator <= 0.0) {
+    return 0.0;
+  }
+
+  const double gamow = twoPiEta / denominator;
+  return std::max(0.0, std::min(gamow, 1.0));
+}
+
+double ComputeBowlerSinyukovLikeSignPiPiValue(
+    double norm, double lambda, double levyExponent, bool useCoulomb,
+    bool useCoreHaloLambda, double qOut, double qSide, double qLong) {
+  const double lambdaEff = useCoreHaloLambda ? lambda : 1.0;
+  const double coulombFactor =
+      useCoulomb ? ComputeLikeSignPiPiGamowFactor(qOut, qSide, qLong) : 1.0;
+  const double quantumStatTerm = std::exp(-levyExponent);
+  return norm * ((1.0 - lambdaEff) +
+                 lambdaEff * coulombFactor * (1.0 + quantumStatTerm));
+}
+
+double Levy3DModel(double *x, double *par) {
+  const bool useCoulomb = par[6] > 0.5;
+  const bool useCoreHaloLambda = par[7] > 0.5;
+  const double qOut = x[0];
+  const double qSide = x[1];
+  const double qLong = x[2];
   const double qOut2 = x[0] * x[0];
   const double qSide2 = x[1] * x[1];
   const double qLong2 = x[2] * x[2];
@@ -590,12 +701,14 @@ double Levy3DModel(double *x, double *par) {
       (par[2] * qOut2 + par[3] * qSide2 + par[4] * qLong2) / (kHbarC * kHbarC);
   const double levyExponent = std::pow(std::max(argument, 0.0), par[5] / 2.0);
 
-  return par[0] * (1.0 + par[1] * std::exp(-levyExponent));
+  return ComputeBowlerSinyukovLikeSignPiPiValue(par[0], par[1], levyExponent,
+                                                useCoulomb, useCoreHaloLambda,
+                                                qOut, qSide, qLong);
 }
 
 double Levy3DFullModel(double *x, double *par) {
-  constexpr double kHbarC = 0.1973269804;
-
+  const bool useCoulomb = par[9] > 0.5;
+  const bool useCoreHaloLambda = par[10] > 0.5;
   const double qOut = x[0];
   const double qSide = x[1];
   const double qLong = x[2];
@@ -607,35 +720,50 @@ double Levy3DFullModel(double *x, double *par) {
       (kHbarC * kHbarC);
   const double levyExponent = std::pow(std::max(argument, 0.0), par[8] / 2.0);
 
-  return par[0] * (1.0 + par[1] * std::exp(-levyExponent));
+  return ComputeBowlerSinyukovLikeSignPiPiValue(par[0], par[1], levyExponent,
+                                                useCoulomb, useCoreHaloLambda,
+                                                qOut, qSide, qLong);
 }
 
-TF3 *BuildLevyFitFunction(const string &funcName, double fitQMax) {
-  auto fitFunc = new TF3(funcName.c_str(), Levy3DModel, -fitQMax, fitQMax,
-                         -fitQMax, fitQMax, -fitQMax, fitQMax, 6);
+TF3 *BuildLevyFitFunction(const string &funcName,
+                          const Levy3DFitOptions &fitOptions) {
+  auto fitFunc =
+      new TF3(funcName.c_str(), Levy3DModel, -fitOptions.fitQMax,
+              fitOptions.fitQMax, -fitOptions.fitQMax, fitOptions.fitQMax,
+              -fitOptions.fitQMax, fitOptions.fitQMax, 8);
   fitFunc->SetParName(0, "Norm");
   fitFunc->SetParName(1, "lambda");
   fitFunc->SetParName(2, "Rout2");
   fitFunc->SetParName(3, "Rside2");
   fitFunc->SetParName(4, "Rlong2");
   fitFunc->SetParName(5, "alpha");
+  fitFunc->SetParName(6, "UseCoulomb");
+  fitFunc->SetParName(7, "UseCoreHaloLambda");
 
-  fitFunc->SetParameters(1.0, 0.5, 25.0, 25.0, 25.0, 1.5);
+  fitFunc->SetParameters(1.0, 0.5, 25.0, 25.0, 25.0, 1.5, 0.0, 1.0);
   fitFunc->SetParLimits(0, 0.5, 1.5);
-  fitFunc->SetParLimits(1, 0.0, 5.0);
+  fitFunc->SetParLimits(1, 0.0, 1.0);
   fitFunc->SetParLimits(2, 0.01, 400.0);
   fitFunc->SetParLimits(3, 0.01, 400.0);
   fitFunc->SetParLimits(4, 0.01, 400.0);
   fitFunc->SetParLimits(5, 0.5, 2.0);
+  fitFunc->FixParameter(6, fitOptions.useCoulomb ? 1.0 : 0.0);
+  fitFunc->FixParameter(7, fitOptions.useCoreHaloLambda ? 1.0 : 0.0);
+  if (!fitOptions.useCoreHaloLambda) {
+    fitFunc->FixParameter(1, 1.0);
+  }
   fitFunc->SetNpx(60);
   fitFunc->SetNpy(60);
   fitFunc->SetNpz(60);
   return fitFunc;
 }
 
-TF3 *BuildFullLevyFitFunction(const string &funcName, double fitQMax) {
-  auto fitFunc = new TF3(funcName.c_str(), Levy3DFullModel, -fitQMax, fitQMax,
-                         -fitQMax, fitQMax, -fitQMax, fitQMax, 9);
+TF3 *BuildFullLevyFitFunction(const string &funcName,
+                              const Levy3DFitOptions &fitOptions) {
+  auto fitFunc =
+      new TF3(funcName.c_str(), Levy3DFullModel, -fitOptions.fitQMax,
+              fitOptions.fitQMax, -fitOptions.fitQMax, fitOptions.fitQMax,
+              -fitOptions.fitQMax, fitOptions.fitQMax, 11);
   fitFunc->SetParName(0, "Norm");
   fitFunc->SetParName(1, "lambda");
   fitFunc->SetParName(2, "Rout2");
@@ -645,10 +773,13 @@ TF3 *BuildFullLevyFitFunction(const string &funcName, double fitQMax) {
   fitFunc->SetParName(6, "Routlong2");
   fitFunc->SetParName(7, "Rsidelong2");
   fitFunc->SetParName(8, "alpha");
+  fitFunc->SetParName(9, "UseCoulomb");
+  fitFunc->SetParName(10, "UseCoreHaloLambda");
 
-  fitFunc->SetParameters(1.0, 0.5, 25.0, 25.0, 25.0, 0.0, 0.0, 0.0, 1.5);
+  fitFunc->SetParameters(1.0, 0.5, 25.0, 25.0, 25.0, 0.0, 0.0, 0.0, 1.5, 0.0,
+                         1.0);
   fitFunc->SetParLimits(0, 0.5, 1.5);
-  fitFunc->SetParLimits(1, 0.0, 5.0);
+  fitFunc->SetParLimits(1, 0.0, 1.0);
   fitFunc->SetParLimits(2, 0.01, 400.0);
   fitFunc->SetParLimits(3, 0.01, 400.0);
   fitFunc->SetParLimits(4, 0.01, 400.0);
@@ -656,6 +787,11 @@ TF3 *BuildFullLevyFitFunction(const string &funcName, double fitQMax) {
   fitFunc->SetParLimits(6, -200.0, 200.0);
   fitFunc->SetParLimits(7, -200.0, 200.0);
   fitFunc->SetParLimits(8, 0.5, 2.0);
+  fitFunc->FixParameter(9, fitOptions.useCoulomb ? 1.0 : 0.0);
+  fitFunc->FixParameter(10, fitOptions.useCoreHaloLambda ? 1.0 : 0.0);
+  if (!fitOptions.useCoreHaloLambda) {
+    fitFunc->FixParameter(1, 1.0);
+  }
   fitFunc->SetNpx(60);
   fitFunc->SetNpy(60);
   fitFunc->SetNpz(60);
@@ -733,6 +869,16 @@ string FormatParameterLine(const string &label, double value, double error,
   return ss.str();
 }
 
+string BuildFitModeTitle(const Levy3DFitResult &fitResult) {
+  return fitResult.hasOffDiagonal ? "Full Levy fit" : "Diagonal Levy fit";
+}
+
+string BuildFitSwitchLine(const Levy3DFitResult &fitResult) {
+  return string("Coulomb(#pi^{#pm}#pi^{#pm}): ") +
+         (fitResult.usesCoulomb ? "on" : "off") +
+         ", core-halo: " + (fitResult.usesCoreHaloLambda ? "on" : "off");
+}
+
 TPaveText *BuildFitParameterBox(const Levy3DFitResult &fitResult, double x1,
                                 double y1, double x2, double y2) {
   auto box = new TPaveText(x1, y1, x2, y2, "NDC");
@@ -743,24 +889,29 @@ TPaveText *BuildFitParameterBox(const Levy3DFitResult &fitResult, double x1,
   box->SetTextFont(42);
   box->SetTextSize(fitResult.hasOffDiagonal ? 0.024 : 0.028);
 
-  box->AddText(fitResult.hasOffDiagonal ? "Full Levy fit" : "Diagonal Levy fit");
-  box->AddText(FormatParameterLine("N", fitResult.norm, fitResult.normErr).c_str());
+  box->AddText(BuildFitModeTitle(fitResult).c_str());
+  box->AddText(BuildFitSwitchLine(fitResult).c_str());
   box->AddText(
-      FormatParameterLine("#lambda", fitResult.lambda, fitResult.lambdaErr).c_str());
-  box->AddText(FormatParameterLine("#alpha", fitResult.alpha, fitResult.alphaErr)
+      FormatParameterLine("N", fitResult.norm, fitResult.normErr).c_str());
+  if (fitResult.usesCoreHaloLambda) {
+    box->AddText(
+        FormatParameterLine("#lambda", fitResult.lambda, fitResult.lambdaErr)
+            .c_str());
+  } else {
+    box->AddText("#lambda fixed = 1.000");
+  }
+  box->AddText(
+      FormatParameterLine("#alpha", fitResult.alpha, fitResult.alphaErr)
+          .c_str());
+  box->AddText(FormatParameterLine("R_{out}^{2}", fitResult.rout2,
+                                   fitResult.rout2Err, "fm^{2}")
                    .c_str());
-  box->AddText(
-      FormatParameterLine("R_{out}^{2}", fitResult.rout2, fitResult.rout2Err,
-                          "fm^{2}")
-          .c_str());
-  box->AddText(
-      FormatParameterLine("R_{side}^{2}", fitResult.rside2, fitResult.rside2Err,
-                          "fm^{2}")
-          .c_str());
-  box->AddText(
-      FormatParameterLine("R_{long}^{2}", fitResult.rlong2, fitResult.rlong2Err,
-                          "fm^{2}")
-          .c_str());
+  box->AddText(FormatParameterLine("R_{side}^{2}", fitResult.rside2,
+                                   fitResult.rside2Err, "fm^{2}")
+                   .c_str());
+  box->AddText(FormatParameterLine("R_{long}^{2}", fitResult.rlong2,
+                                   fitResult.rlong2Err, "fm^{2}")
+                   .c_str());
 
   if (fitResult.hasOffDiagonal) {
     box->AddText(FormatParameterLine("R_{outside}^{2}", fitResult.routside2,
@@ -769,15 +920,14 @@ TPaveText *BuildFitParameterBox(const Levy3DFitResult &fitResult, double x1,
     box->AddText(FormatParameterLine("R_{outlong}^{2}", fitResult.routlong2,
                                      fitResult.routlong2Err, "fm^{2}")
                      .c_str());
-    box->AddText(FormatParameterLine("R_{sidelong}^{2}",
-                                     fitResult.rsidelong2,
+    box->AddText(FormatParameterLine("R_{sidelong}^{2}", fitResult.rsidelong2,
                                      fitResult.rsidelong2Err, "fm^{2}")
                      .c_str());
   }
 
   std::stringstream chi2Line;
-  chi2Line << std::fixed << std::setprecision(2) << "#chi^{2}/NDF = "
-           << fitResult.chi2 << "/" << fitResult.ndf;
+  chi2Line << std::fixed << std::setprecision(2)
+           << "#chi^{2}/NDF = " << fitResult.chi2 << "/" << fitResult.ndf;
   box->AddText(chi2Line.str().c_str());
 
   return box;
@@ -806,7 +956,7 @@ TCanvas *BuildProjectionCanvas(const string &canvasName, TH1D *hData,
   legend->Draw();
 
   auto parameterBox = BuildFitParameterBox(
-      fitResult, 0.16, fitResult.hasOffDiagonal ? 0.46 : 0.56, 0.56, 0.88);
+      fitResult, 0.16, fitResult.hasOffDiagonal ? 0.40 : 0.50, 0.58, 0.88);
   parameterBox->Draw();
 
   canvas->Update();
@@ -814,8 +964,7 @@ TCanvas *BuildProjectionCanvas(const string &canvasName, TH1D *hData,
 }
 
 TCanvas *Build3DComparisonCanvas(const string &canvasName, TH3D *hData,
-                                 TH3D *hFit,
-                                 const Levy3DFitResult &fitResult) {
+                                 TH3D *hFit, const Levy3DFitResult &fitResult) {
   auto canvas = new TCanvas(canvasName.c_str(), canvasName.c_str(), 1400, 600);
   canvas->Divide(2, 1);
   canvas->cd(1);
@@ -827,7 +976,7 @@ TCanvas *Build3DComparisonCanvas(const string &canvasName, TH3D *hData,
   gPad->SetPhi(32);
   hFit->Draw("BOX2Z");
   auto parameterBox = BuildFitParameterBox(
-      fitResult, 0.12, fitResult.hasOffDiagonal ? 0.34 : 0.46, 0.56, 0.88);
+      fitResult, 0.12, fitResult.hasOffDiagonal ? 0.28 : 0.40, 0.58, 0.88);
   parameterBox->Draw();
   canvas->Update();
   return canvas;
@@ -842,25 +991,23 @@ TH3D *BuildCFHistogramFromSparse(THnSparseF *hSE_sparse, THnSparseF *hME_sparse,
                                  const string &histName) {
   hSE_sparse->GetAxis(6)->SetRange(phiBin, phiBin);
   auto hSE_a = (TH3D *)hSE_sparse->Projection(0, 1, 2);
+  hSE_a->SetDirectory(nullptr);
 
   hSE_sparse->GetAxis(6)->SetRange(phiBinSym, phiBinSym);
   auto hSE_b = (TH3D *)hSE_sparse->Projection(0, 1, 2);
+  hSE_b->SetDirectory(nullptr);
   hSE_a->Add(hSE_b);
 
-  hME_sparse->GetAxis(6)->SetRange(phiBin, phiBin);
+  hME_sparse->GetAxis(6)->SetRange(0, 0);
   auto hME_a = (TH3D *)hME_sparse->Projection(0, 1, 2);
+  hME_a->SetDirectory(nullptr);
 
-  hME_sparse->GetAxis(6)->SetRange(phiBinSym, phiBinSym);
-  auto hME_b = (TH3D *)hME_sparse->Projection(0, 1, 2);
-  hME_a->Add(hME_b);
-
-  const double intSE = hSE_a->Integral();
-  const double intME = hME_a->Integral();
+  const double intSE = hSE_a->Integral("width");
+  const double intME = hME_a->Integral("width");
   if (intSE == 0.0 || intME == 0.0) {
     delete hSE_a;
     delete hSE_b;
     delete hME_a;
-    delete hME_b;
     return nullptr;
   }
 
@@ -868,6 +1015,7 @@ TH3D *BuildCFHistogramFromSparse(THnSparseF *hSE_sparse, THnSparseF *hME_sparse,
   hME_a->Scale(1.0 / intME);
 
   auto hCF = (TH3D *)hSE_a->Clone(histName.c_str());
+  hCF->SetDirectory(nullptr);
   hCF->SetTitle(histName.c_str());
   hCF->Divide(hME_a);
   hCF->GetXaxis()->SetTitle("q_{out} (GeV/c)");
@@ -877,70 +1025,78 @@ TH3D *BuildCFHistogramFromSparse(THnSparseF *hSE_sparse, THnSparseF *hME_sparse,
   delete hSE_a;
   delete hSE_b;
   delete hME_a;
-  delete hME_b;
   return hCF;
 }
 
 bool FitAndWriteSingleCFHistogram(TH3D *hCF, Levy3DFitResult &fitResult,
                                   const string &wpath, const string &wfilename,
-                                  bool useFullModel, double fitQMax) {
+                                  bool useFullModel,
+                                  const Levy3DFitOptions &fitOptions) {
+  auto fillResultFromFunction = [&](TF3 *fitFunc) {
+    fitResult.fitModel = useFullModel ? "full" : "diag";
+    fitResult.hasOffDiagonal = useFullModel;
+    fitResult.usesCoulomb = fitOptions.useCoulomb;
+    fitResult.usesCoreHaloLambda = fitOptions.useCoreHaloLambda;
+    fitResult.norm = fitFunc->GetParameter(0);
+    fitResult.normErr = fitFunc->GetParError(0);
+    fitResult.lambda =
+        fitOptions.useCoreHaloLambda ? fitFunc->GetParameter(1) : 1.0;
+    fitResult.lambdaErr =
+        fitOptions.useCoreHaloLambda ? fitFunc->GetParError(1) : 0.0;
+    fitResult.rout2 = fitFunc->GetParameter(2);
+    fitResult.rout2Err = fitFunc->GetParError(2);
+    fitResult.rside2 = fitFunc->GetParameter(3);
+    fitResult.rside2Err = fitFunc->GetParError(3);
+    fitResult.rlong2 = fitFunc->GetParameter(4);
+    fitResult.rlong2Err = fitFunc->GetParError(4);
+    if (useFullModel) {
+      fitResult.routside2 = fitFunc->GetParameter(5);
+      fitResult.routside2Err = fitFunc->GetParError(5);
+      fitResult.routlong2 = fitFunc->GetParameter(6);
+      fitResult.routlong2Err = fitFunc->GetParError(6);
+      fitResult.rsidelong2 = fitFunc->GetParameter(7);
+      fitResult.rsidelong2Err = fitFunc->GetParError(7);
+      fitResult.alpha = fitFunc->GetParameter(8);
+      fitResult.alphaErr = fitFunc->GetParError(8);
+    } else {
+      fitResult.alpha = fitFunc->GetParameter(5);
+      fitResult.alphaErr = fitFunc->GetParError(5);
+    }
+    fitResult.chi2 = fitFunc->GetChisquare();
+    fitResult.ndf = fitFunc->GetNDF();
+  };
+
   const string objectName = fitResult.histName;
 
   TF3 *fitFunc =
       useFullModel
-          ? BuildFullLevyFitFunction(objectName + "_levy3d_full_fit", fitQMax)
-          : BuildLevyFitFunction(objectName + "_levy3d_fit", fitQMax);
+          ? BuildFullLevyFitFunction(objectName + "_levy3d_full_fit",
+                                     fitOptions)
+          : BuildLevyFitFunction(objectName + "_levy3d_fit", fitOptions);
   auto fitStatus = hCF->Fit(fitFunc, "RSMNQ0");
-
-  fitResult.fitModel = useFullModel ? "full" : "diag";
-  fitResult.hasOffDiagonal = useFullModel;
-  fitResult.norm = fitFunc->GetParameter(0);
-  fitResult.normErr = fitFunc->GetParError(0);
-  fitResult.lambda = fitFunc->GetParameter(1);
-  fitResult.lambdaErr = fitFunc->GetParError(1);
-  fitResult.rout2 = fitFunc->GetParameter(2);
-  fitResult.rout2Err = fitFunc->GetParError(2);
-  fitResult.rside2 = fitFunc->GetParameter(3);
-  fitResult.rside2Err = fitFunc->GetParError(3);
-  fitResult.rlong2 = fitFunc->GetParameter(4);
-  fitResult.rlong2Err = fitFunc->GetParError(4);
-  if (useFullModel) {
-    fitResult.routside2 = fitFunc->GetParameter(5);
-    fitResult.routside2Err = fitFunc->GetParError(5);
-    fitResult.routlong2 = fitFunc->GetParameter(6);
-    fitResult.routlong2Err = fitFunc->GetParError(6);
-    fitResult.rsidelong2 = fitFunc->GetParameter(7);
-    fitResult.rsidelong2Err = fitFunc->GetParError(7);
-    fitResult.alpha = fitFunc->GetParameter(8);
-    fitResult.alphaErr = fitFunc->GetParError(8);
-  } else {
-    fitResult.alpha = fitFunc->GetParameter(5);
-    fitResult.alphaErr = fitFunc->GetParError(5);
-  }
-  fitResult.chi2 = fitFunc->GetChisquare();
-  fitResult.ndf = fitFunc->GetNDF();
+  fillResultFromFunction(fitFunc);
   fitResult.status = static_cast<int>(fitStatus);
 
   const string fitHistName =
       objectName + (useFullModel ? "_full_fit3d" : "_fit3d");
   auto hFit3D = BuildFittedHistogramLike(hCF, fitFunc, fitHistName);
 
-  auto hProjXData =
-      BuildProjectionXWithinWindow(hCF, objectName + "_data_ProjX", fitQMax);
-  auto hProjYData =
-      BuildProjectionYWithinWindow(hCF, objectName + "_data_ProjY", fitQMax);
-  auto hProjZData =
-      BuildProjectionZWithinWindow(hCF, objectName + "_data_ProjZ", fitQMax);
+  auto hProjXData = BuildProjectionXWithinWindow(
+      hCF, objectName + "_data_ProjX", kProjection1DWindow);
+  auto hProjYData = BuildProjectionYWithinWindow(
+      hCF, objectName + "_data_ProjY", kProjection1DWindow);
+  auto hProjZData = BuildProjectionZWithinWindow(
+      hCF, objectName + "_data_ProjZ", kProjection1DWindow);
 
   auto hProjXFit = BuildProjectionXWithinWindow(
       hFit3D, objectName + (useFullModel ? "_full_fit_ProjX" : "_fit_ProjX"),
-      fitQMax);
+      kProjection1DWindow);
   auto hProjYFit = BuildProjectionYWithinWindow(
       hFit3D, objectName + (useFullModel ? "_full_fit_ProjY" : "_fit_ProjY"),
-      fitQMax);
+      kProjection1DWindow);
   auto hProjZFit = BuildProjectionZWithinWindow(
       hFit3D, objectName + (useFullModel ? "_full_fit_ProjZ" : "_fit_ProjZ"),
-      fitQMax);
+      kProjection1DWindow);
 
   auto cProjX = BuildProjectionCanvas(
       objectName + (useFullModel ? "_canvas_full_ProjX" : "_canvas_ProjX"),
@@ -1031,12 +1187,12 @@ bool MatchSelectedBin(const Levy3DFitResult &fitResult,
                      });
 }
 
-void FitCF3DWithSelectedBins(const string &rpath, const string &rfilename,
-                             const string &wpath, const string &wfilename,
-                             const string &txtFilename,
-                             std::vector<std::pair<double, double>> centBins,
-                             std::vector<std::pair<double, double>> mTBins,
-                             bool useFullModel, double fitQMax = 0.15) {
+void FitCF3DWithSelectedBins(
+    const string &rpath, const string &rfilename, const string &wpath,
+    const string &wfilename, const string &txtFilename,
+    std::vector<std::pair<double, double>> centBins,
+    std::vector<std::pair<double, double>> mTBins, bool useFullModel,
+    const Levy3DFitOptions &fitOptions = Levy3DFitOptions()) {
   const bool oldAddDirectory = TH1::AddDirectoryStatus();
   TH1::AddDirectory(kFALSE);
 
@@ -1080,27 +1236,24 @@ void FitCF3DWithSelectedBins(const string &rpath, const string &rfilename,
 
     cout << "Fitting selected histogram " << objectName << endl;
 
-    auto hCF = dynamic_cast<TH3D *>(rf->Get(objectName.c_str()));
+    auto hCF = LoadStoredCFHistogram(rf, objectName);
     if (!hCF) {
       cout << "WARNING: cannot read histogram " << objectName << endl;
       continue;
     }
 
-    auto hCFClone = (TH3D *)hCF->Clone((objectName + "_data3d").c_str());
-    hCFClone->SetDirectory(nullptr);
-
-    if (FitAndWriteSingleCFHistogram(hCFClone, fitResult, wpath, wfilename,
-                                     useFullModel, fitQMax)) {
+    if (FitAndWriteSingleCFHistogram(hCF, fitResult, wpath, wfilename,
+                                     useFullModel, fitOptions)) {
       fitResults.push_back(fitResult);
     }
 
-    delete hCFClone;
+    delete hCF;
   }
 
   auto wf = GetROOT(wpath, wfilename, "update");
   if (!wf || wf->IsZombie()) {
-    cout << "ERROR: cannot update output ROOT file " << wpath << "/" << wfilename
-         << ".root for summary graphs" << endl;
+    cout << "ERROR: cannot update output ROOT file " << wpath << "/"
+         << wfilename << ".root for summary graphs" << endl;
     delete wf;
   } else {
     WriteR2Graphs(wf, fitResults);
@@ -1112,30 +1265,36 @@ void FitCF3DWithSelectedBins(const string &rpath, const string &rfilename,
 
   rf->Close();
   delete rf;
+  cout << (useFullModel ? "Full 3D Levy fit" : "Diagonal 3D Levy fit")
+       << " results have been written to " << wpath << "/" << wfilename
+       << ".root and " << wpath << "/" << txtFilename << ".txt" << endl;
   TH1::AddDirectory(oldAddDirectory);
 }
 
 void WriteFitResultsSummary(const string &txtPath,
                             const vector<Levy3DFitResult> &results) {
   ofstream out(txtPath);
-  out << "# fitModel histName centLow centHigh mTLow mTHigh phi norm normErr "
-         "lambda lambdaErr Rout2 Rout2Err Rside2 Rside2Err Rlong2 Rlong2Err "
-         "Routside2 Routside2Err Routlong2 Routlong2Err Rsidelong2 "
-         "Rsidelong2Err alpha alphaErr chi2 ndf status\n";
+  out << "# fitModel usesCoulomb usesCoreHaloLambda histName centLow centHigh "
+         "mTLow mTHigh phi norm normErr lambda lambdaErr Rout2 Rout2Err "
+         "Rside2 Rside2Err Rlong2 Rlong2Err Routside2 Routside2Err "
+         "Routlong2 Routlong2Err Rsidelong2 Rsidelong2Err alpha alphaErr "
+         "chi2 ndf status\n";
   out << std::fixed << std::setprecision(6);
 
   for (const auto &result : results) {
-    out << result.fitModel << " " << result.histName << " " << result.centLow
-        << " " << result.centHigh << " " << result.mTLow << " " << result.mTHigh
-        << " " << result.phi << " " << result.norm << " " << result.normErr
-        << " " << result.lambda << " " << result.lambdaErr << " "
-        << result.rout2 << " " << result.rout2Err << " " << result.rside2 << " "
-        << result.rside2Err << " " << result.rlong2 << " " << result.rlong2Err
-        << " " << result.routside2 << " " << result.routside2Err << " "
-        << result.routlong2 << " " << result.routlong2Err << " "
-        << result.rsidelong2 << " " << result.rsidelong2Err << " "
-        << result.alpha << " " << result.alphaErr << " " << result.chi2 << " "
-        << result.ndf << " " << result.status << "\n";
+    out << result.fitModel << " " << (result.usesCoulomb ? 1 : 0) << " "
+        << (result.usesCoreHaloLambda ? 1 : 0) << " " << result.histName << " "
+        << result.centLow << " " << result.centHigh << " " << result.mTLow
+        << " " << result.mTHigh << " " << result.phi << " " << result.norm
+        << " " << result.normErr << " " << result.lambda << " "
+        << result.lambdaErr << " " << result.rout2 << " " << result.rout2Err
+        << " " << result.rside2 << " " << result.rside2Err << " "
+        << result.rlong2 << " " << result.rlong2Err << " " << result.routside2
+        << " " << result.routside2Err << " " << result.routlong2 << " "
+        << result.routlong2Err << " " << result.rsidelong2 << " "
+        << result.rsidelong2Err << " " << result.alpha << " " << result.alphaErr
+        << " " << result.chi2 << " " << result.ndf << " " << result.status
+        << "\n";
   }
 }
 
@@ -1158,6 +1317,11 @@ void WriteR2Graphs(TFile *wf, const vector<Levy3DFitResult> &results) {
     const bool hasOffDiagonal = std::any_of(
         groupResults.begin(), groupResults.end(),
         [](const Levy3DFitResult &result) { return result.hasOffDiagonal; });
+    const bool usesCoreHaloLambda =
+        std::any_of(groupResults.begin(), groupResults.end(),
+                    [](const Levy3DFitResult &result) {
+                      return result.usesCoreHaloLambda;
+                    });
     auto gRout2 = new TGraphErrors(nPoints);
     auto gRside2 = new TGraphErrors(nPoints);
     auto gRlong2 = new TGraphErrors(nPoints);
@@ -1168,7 +1332,8 @@ void WriteR2Graphs(TFile *wf, const vector<Levy3DFitResult> &results) {
     TGraphErrors *gRsidelong2 =
         hasOffDiagonal ? new TGraphErrors(nPoints) : nullptr;
     auto gAlpha = new TGraphErrors(nPoints);
-    auto gLambda = new TGraphErrors(nPoints);
+    TGraphErrors *gLambda =
+        usesCoreHaloLambda ? new TGraphErrors(nPoints) : nullptr;
 
     for (int i = 0; i < nPoints; ++i) {
       const auto &result = groupResults[i];
@@ -1195,8 +1360,10 @@ void WriteR2Graphs(TFile *wf, const vector<Levy3DFitResult> &results) {
       gAlpha->SetPoint(i, result.phi, result.alpha);
       gAlpha->SetPointError(i, 0., result.alphaErr);
 
-      gLambda->SetPoint(i, result.phi, result.lambda);
-      gLambda->SetPointError(i, 0., result.lambdaErr);
+      if (usesCoreHaloLambda) {
+        gLambda->SetPoint(i, result.phi, result.lambda);
+        gLambda->SetPointError(i, 0., result.lambdaErr);
+      }
     }
 
     auto fitCosRout2 = new TF1((groupKey + "_Rout2_phi_fit").c_str(),
@@ -1240,10 +1407,13 @@ void WriteR2Graphs(TFile *wf, const vector<Levy3DFitResult> &results) {
     fitConstAlpha->SetParName(0, "alpha0");
     fitConstAlpha->SetParameter(0, groupResults.front().alpha);
 
-    auto fitConstLambda = new TF1((groupKey + "_lambda_phi_fit").c_str(), "[0]",
-                                  0., TMath::Pi() / 2.);
-    fitConstLambda->SetParName(0, "lambda0");
-    fitConstLambda->SetParameter(0, groupResults.front().lambda);
+    TF1 *fitConstLambda = nullptr;
+    if (usesCoreHaloLambda) {
+      fitConstLambda = new TF1((groupKey + "_lambda_phi_fit").c_str(), "[0]",
+                               0., TMath::Pi() / 2.);
+      fitConstLambda->SetParName(0, "lambda0");
+      fitConstLambda->SetParameter(0, groupResults.front().lambda);
+    }
 
     string routName = groupKey + "_Rout2_vs_phi";
     gRout2->SetName(routName.c_str());
@@ -1333,27 +1503,31 @@ void WriteR2Graphs(TFile *wf, const vector<Levy3DFitResult> &results) {
     gAlpha->Write();
     fitConstAlpha->Write();
 
-    string lambdaName = groupKey + "_lambda_vs_phi";
-    gLambda->SetName(lambdaName.c_str());
-    gLambda->SetTitle(
-        (lambdaName + ";#phi_{pair}-#Psi_{EP} (rad);#lambda").c_str());
-    gLambda->SetMarkerStyle(33);
-    gLambda->SetMarkerColor(kOrange + 7);
-    gLambda->SetLineColor(kOrange + 7);
-    gLambda->Fit(fitConstLambda, "QN");
-    gLambda->Write();
-    fitConstLambda->Write();
+    if (usesCoreHaloLambda) {
+      string lambdaName = groupKey + "_lambda_vs_phi";
+      gLambda->SetName(lambdaName.c_str());
+      gLambda->SetTitle(
+          (lambdaName + ";#phi_{pair}-#Psi_{EP} (rad);#lambda").c_str());
+      gLambda->SetMarkerStyle(33);
+      gLambda->SetMarkerColor(kOrange + 7);
+      gLambda->SetLineColor(kOrange + 7);
+      gLambda->Fit(fitConstLambda, "QN");
+      gLambda->Write();
+      fitConstLambda->Write();
+    }
 
     delete gRout2;
     delete gRside2;
     delete gRlong2;
     delete gAlpha;
-    delete gLambda;
     delete fitCosRout2;
     delete fitCosRside2;
     delete fitCosRlong2;
     delete fitConstAlpha;
-    delete fitConstLambda;
+    if (usesCoreHaloLambda) {
+      delete gLambda;
+      delete fitConstLambda;
+    }
 
     if (hasOffDiagonal) {
       delete gRoutside2;
@@ -1370,7 +1544,8 @@ void WriteR2Graphs(TFile *wf, const vector<Levy3DFitResult> &results) {
 
 void FitCF3DWithLevy(const string &rpath, const string &rfilename,
                      const string &wpath, const string &wfilename,
-                     const string &txtFilename, double fitQMax = 0.15) {
+                     const string &txtFilename,
+                     const Levy3DFitOptions &fitOptions = Levy3DFitOptions()) {
   const bool oldAddDirectory = TH1::AddDirectoryStatus();
   TH1::AddDirectory(kFALSE);
 
@@ -1402,133 +1577,30 @@ void FitCF3DWithLevy(const string &rpath, const string &rfilename,
       continue;
     }
 
-    auto hCF = dynamic_cast<TH3D *>(rf->Get(objectName.c_str()));
+    auto hCF = LoadStoredCFHistogram(rf, objectName);
     if (!hCF) {
       continue;
     }
 
-    auto hCFClone = (TH3D *)hCF->Clone((objectName + "_data3d").c_str());
-    hCFClone->SetDirectory(nullptr);
-
     Levy3DFitResult fitResult;
     if (!ParseCF3DHistogramName(objectName, fitResult)) {
       cout << "WARNING: cannot parse histogram name: " << objectName << endl;
-      delete hCFClone;
+      delete hCF;
       continue;
     }
 
     cout << "Fitting " << objectName << endl;
-    fitResult.fitModel = "diag";
-
-    auto fitFunc = BuildLevyFitFunction(objectName + "_levy3d_fit", fitQMax);
-    auto fitStatus = hCFClone->Fit(fitFunc, "RSMNQ0");
-
-    fitResult.norm = fitFunc->GetParameter(0);
-    fitResult.normErr = fitFunc->GetParError(0);
-    fitResult.lambda = fitFunc->GetParameter(1);
-    fitResult.lambdaErr = fitFunc->GetParError(1);
-    fitResult.rout2 = fitFunc->GetParameter(2);
-    fitResult.rout2Err = fitFunc->GetParError(2);
-    fitResult.rside2 = fitFunc->GetParameter(3);
-    fitResult.rside2Err = fitFunc->GetParError(3);
-    fitResult.rlong2 = fitFunc->GetParameter(4);
-    fitResult.rlong2Err = fitFunc->GetParError(4);
-    fitResult.alpha = fitFunc->GetParameter(5);
-    fitResult.alphaErr = fitFunc->GetParError(5);
-    fitResult.chi2 = fitFunc->GetChisquare();
-    fitResult.ndf = fitFunc->GetNDF();
-    fitResult.status = static_cast<int>(fitStatus);
-    fitResults.push_back(fitResult);
-
-    auto hFit3D =
-        BuildFittedHistogramLike(hCFClone, fitFunc, objectName + "_fit3d");
-
-    auto hProjXData = BuildProjectionXWithinWindow(
-        hCFClone, objectName + "_data_ProjX", fitQMax);
-    auto hProjYData = BuildProjectionYWithinWindow(
-        hCFClone, objectName + "_data_ProjY", fitQMax);
-    auto hProjZData = BuildProjectionZWithinWindow(
-        hCFClone, objectName + "_data_ProjZ", fitQMax);
-
-    auto hProjXFit = BuildProjectionXWithinWindow(
-        hFit3D, objectName + "_fit_ProjX", fitQMax);
-    auto hProjYFit = BuildProjectionYWithinWindow(
-        hFit3D, objectName + "_fit_ProjY", fitQMax);
-    auto hProjZFit = BuildProjectionZWithinWindow(
-        hFit3D, objectName + "_fit_ProjZ", fitQMax);
-
-    auto cProjX = BuildProjectionCanvas(
-        objectName + "_canvas_ProjX", hProjXData, hProjXFit,
-        "q_{out} (GeV/c)", fitResult);
-    auto cProjY =
-        BuildProjectionCanvas(objectName + "_canvas_ProjY", hProjYData,
-                              hProjYFit, "q_{side} (GeV/c)", fitResult);
-    auto cProjZ =
-        BuildProjectionCanvas(objectName + "_canvas_ProjZ", hProjZData,
-                              hProjZFit, "q_{long} (GeV/c)", fitResult);
-    auto c3D =
-        Build3DComparisonCanvas(objectName + "_canvas_3D", hCFClone, hFit3D,
-                                fitResult);
-
-    auto wf = GetROOT(wpath, wfilename, "update");
-    if (!wf || wf->IsZombie()) {
-      cout << "ERROR: cannot update output ROOT file " << wpath << "/"
-           << wfilename << ".root" << endl;
-      delete wf;
-      delete cProjX;
-      delete cProjY;
-      delete cProjZ;
-      delete c3D;
-      delete hProjXData;
-      delete hProjYData;
-      delete hProjZData;
-      delete hProjXFit;
-      delete hProjYFit;
-      delete hProjZFit;
-      delete hFit3D;
-      delete fitFunc;
-      delete hCFClone;
-      continue;
+    if (FitAndWriteSingleCFHistogram(hCF, fitResult, wpath, wfilename, false,
+                                     fitOptions)) {
+      fitResults.push_back(fitResult);
     }
-
-    auto dir = wf->mkdir(objectName.c_str());
-    dir->cd();
-
-    hCFClone->Write();
-    fitFunc->Write();
-    hFit3D->Write();
-    hProjXData->Write();
-    hProjYData->Write();
-    hProjZData->Write();
-    hProjXFit->Write();
-    hProjYFit->Write();
-    hProjZFit->Write();
-    cProjX->Write();
-    cProjY->Write();
-    cProjZ->Write();
-    c3D->Write();
-
-    delete cProjX;
-    delete cProjY;
-    delete cProjZ;
-    delete c3D;
-    delete hProjXData;
-    delete hProjYData;
-    delete hProjZData;
-    delete hProjXFit;
-    delete hProjYFit;
-    delete hProjZFit;
-    delete hFit3D;
-    delete fitFunc;
-    delete hCFClone;
-    wf->Close();
-    delete wf;
+    delete hCF;
   }
 
-  auto wf = GetROOT(wpath, wfilename, "write");
+  auto wf = GetROOT(wpath, wfilename, "update");
   if (!wf || wf->IsZombie()) {
-    cout << "ERROR: cannot update output ROOT file " << wpath << "/" << wfilename
-         << ".root for summary graphs" << endl;
+    cout << "ERROR: cannot update output ROOT file " << wpath << "/"
+         << wfilename << ".root for summary graphs" << endl;
     delete wf;
   } else {
     WriteR2Graphs(wf, fitResults);
@@ -1539,12 +1611,16 @@ void FitCF3DWithLevy(const string &rpath, const string &rfilename,
 
   rf->Close();
   delete rf;
+  cout << "Diagonal 3D Levy fit results have been written to " << wpath << "/"
+       << wfilename << ".root and " << wpath << "/" << txtFilename << ".txt"
+       << endl;
   TH1::AddDirectory(oldAddDirectory);
 }
 
-void FitCF3DWithFullLevy(const string &rpath, const string &rfilename,
-                         const string &wpath, const string &wfilename,
-                         const string &txtFilename, double fitQMax = 0.15) {
+void FitCF3DWithFullLevy(
+    const string &rpath, const string &rfilename, const string &wpath,
+    const string &wfilename, const string &txtFilename,
+    const Levy3DFitOptions &fitOptions = Levy3DFitOptions()) {
   const bool oldAddDirectory = TH1::AddDirectoryStatus();
   TH1::AddDirectory(kFALSE);
 
@@ -1576,140 +1652,30 @@ void FitCF3DWithFullLevy(const string &rpath, const string &rfilename,
       continue;
     }
 
-    auto hCF = dynamic_cast<TH3D *>(rf->Get(objectName.c_str()));
+    auto hCF = LoadStoredCFHistogram(rf, objectName);
     if (!hCF) {
       continue;
     }
 
-    auto hCFClone = (TH3D *)hCF->Clone((objectName + "_data3d").c_str());
-    hCFClone->SetDirectory(nullptr);
-
     Levy3DFitResult fitResult;
     if (!ParseCF3DHistogramName(objectName, fitResult)) {
       cout << "WARNING: cannot parse histogram name: " << objectName << endl;
-      delete hCFClone;
+      delete hCF;
       continue;
     }
 
     cout << "Fitting full Levy model for " << objectName << endl;
-    fitResult.fitModel = "full";
-    fitResult.hasOffDiagonal = true;
-
-    auto fitFunc =
-        BuildFullLevyFitFunction(objectName + "_levy3d_full_fit", fitQMax);
-    auto fitStatus = hCFClone->Fit(fitFunc, "RSMNQ0");
-
-    fitResult.norm = fitFunc->GetParameter(0);
-    fitResult.normErr = fitFunc->GetParError(0);
-    fitResult.lambda = fitFunc->GetParameter(1);
-    fitResult.lambdaErr = fitFunc->GetParError(1);
-    fitResult.rout2 = fitFunc->GetParameter(2);
-    fitResult.rout2Err = fitFunc->GetParError(2);
-    fitResult.rside2 = fitFunc->GetParameter(3);
-    fitResult.rside2Err = fitFunc->GetParError(3);
-    fitResult.rlong2 = fitFunc->GetParameter(4);
-    fitResult.rlong2Err = fitFunc->GetParError(4);
-    fitResult.routside2 = fitFunc->GetParameter(5);
-    fitResult.routside2Err = fitFunc->GetParError(5);
-    fitResult.routlong2 = fitFunc->GetParameter(6);
-    fitResult.routlong2Err = fitFunc->GetParError(6);
-    fitResult.rsidelong2 = fitFunc->GetParameter(7);
-    fitResult.rsidelong2Err = fitFunc->GetParError(7);
-    fitResult.alpha = fitFunc->GetParameter(8);
-    fitResult.alphaErr = fitFunc->GetParError(8);
-    fitResult.chi2 = fitFunc->GetChisquare();
-    fitResult.ndf = fitFunc->GetNDF();
-    fitResult.status = static_cast<int>(fitStatus);
-    fitResults.push_back(fitResult);
-
-    auto hFit3D =
-        BuildFittedHistogramLike(hCFClone, fitFunc, objectName + "_full_fit3d");
-
-    auto hProjXData = BuildProjectionXWithinWindow(
-        hCFClone, objectName + "_data_ProjX", fitQMax);
-    auto hProjYData = BuildProjectionYWithinWindow(
-        hCFClone, objectName + "_data_ProjY", fitQMax);
-    auto hProjZData = BuildProjectionZWithinWindow(
-        hCFClone, objectName + "_data_ProjZ", fitQMax);
-
-    auto hProjXFit = BuildProjectionXWithinWindow(
-        hFit3D, objectName + "_full_fit_ProjX", fitQMax);
-    auto hProjYFit = BuildProjectionYWithinWindow(
-        hFit3D, objectName + "_full_fit_ProjY", fitQMax);
-    auto hProjZFit = BuildProjectionZWithinWindow(
-        hFit3D, objectName + "_full_fit_ProjZ", fitQMax);
-
-    auto cProjX =
-        BuildProjectionCanvas(objectName + "_canvas_full_ProjX", hProjXData,
-                              hProjXFit, "q_{out} (GeV/c)", fitResult);
-    auto cProjY =
-        BuildProjectionCanvas(objectName + "_canvas_full_ProjY", hProjYData,
-                              hProjYFit, "q_{side} (GeV/c)", fitResult);
-    auto cProjZ =
-        BuildProjectionCanvas(objectName + "_canvas_full_ProjZ", hProjZData,
-                              hProjZFit, "q_{long} (GeV/c)", fitResult);
-    auto c3D = Build3DComparisonCanvas(objectName + "_canvas_full_3D", hCFClone,
-                                       hFit3D, fitResult);
-
-    auto wf = GetROOT(wpath, wfilename, "update");
-    if (!wf || wf->IsZombie()) {
-      cout << "ERROR: cannot update output ROOT file " << wpath << "/"
-           << wfilename << ".root" << endl;
-      delete wf;
-      delete cProjX;
-      delete cProjY;
-      delete cProjZ;
-      delete c3D;
-      delete hProjXData;
-      delete hProjYData;
-      delete hProjZData;
-      delete hProjXFit;
-      delete hProjYFit;
-      delete hProjZFit;
-      delete hFit3D;
-      delete fitFunc;
-      delete hCFClone;
-      continue;
+    if (FitAndWriteSingleCFHistogram(hCF, fitResult, wpath, wfilename, true,
+                                     fitOptions)) {
+      fitResults.push_back(fitResult);
     }
-
-    auto dir = wf->mkdir(objectName.c_str());
-    dir->cd();
-
-    hCFClone->Write();
-    fitFunc->Write();
-    hFit3D->Write();
-    hProjXData->Write();
-    hProjYData->Write();
-    hProjZData->Write();
-    hProjXFit->Write();
-    hProjYFit->Write();
-    hProjZFit->Write();
-    cProjX->Write();
-    cProjY->Write();
-    cProjZ->Write();
-    c3D->Write();
-
-    delete cProjX;
-    delete cProjY;
-    delete cProjZ;
-    delete c3D;
-    delete hProjXData;
-    delete hProjYData;
-    delete hProjZData;
-    delete hProjXFit;
-    delete hProjYFit;
-    delete hProjZFit;
-    delete hFit3D;
-    delete fitFunc;
-    delete hCFClone;
-    wf->Close();
-    delete wf;
+    delete hCF;
   }
 
   auto wf = GetROOT(wpath, wfilename, "update");
   if (!wf || wf->IsZombie()) {
-    cout << "ERROR: cannot update output ROOT file " << wpath << "/" << wfilename
-         << ".root for summary graphs" << endl;
+    cout << "ERROR: cannot update output ROOT file " << wpath << "/"
+         << wfilename << ".root for summary graphs" << endl;
     delete wf;
   } else {
     WriteR2Graphs(wf, fitResults);
@@ -1720,6 +1686,9 @@ void FitCF3DWithFullLevy(const string &rpath, const string &rfilename,
 
   rf->Close();
   delete rf;
+  cout << "Full 3D Levy fit results have been written to " << wpath << "/"
+       << wfilename << ".root and " << wpath << "/" << txtFilename << ".txt"
+       << endl;
   TH1::AddDirectory(oldAddDirectory);
 }
 
@@ -1740,7 +1709,7 @@ void _3d_cf_from_exp() {
   // string data_set = "23zzh_pass5_small_noepmix";
 
   //   string data_set = "25ae_pass2";
-  string data_set = "25ae_pass2_test";
+  string data_set = "25ae_pass2_test2";
   // string data_set = "25ae_pass2_noepmix";
   // string data_set = "25ae_pass2_noepmix_moremult";
   // string data_set = "25ae_pass2_epmix";
@@ -1750,10 +1719,28 @@ void _3d_cf_from_exp() {
   string rpath_pbpb =
       "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/PbPb";
   string rpath_oo = "/Users/allenzhou/ALICE/alidata/hyperloop_res/femtoep/OO";
+  string wpath_pbpb = "/Users/allenzhou/ALICE/alidata/femtoep_res/PbPb";
+  string wpath_oo = "/Users/allenzhou/ALICE/alidata/femtoep_res/OO";
+
+  string wpath, rpath;
 
   // enum system = {"PbPb", "OO"}; forbidden
   //   string rpath = rpath_pbpb;
-  string rpath = rpath_oo;
+  bool kisoo = 1;
+  bool kispbpb = 0;
+
+  if (kisoo && kispbpb) {
+    cout << "ERROR: both kisoo and kispbpb cannot be true at the same time."
+         << endl;
+    return;
+  }
+  if (kisoo) {
+    rpath = rpath_oo;
+    wpath = wpath_oo;
+  } else if (kispbpb) {
+    rpath = rpath_pbpb;
+    wpath = wpath_pbpb;
+  }
 
   // string rpath2 = "/Users/allenzhou/ALICE/scripts/femtoep";
   // string rpath2 = rpath1;
@@ -1769,7 +1756,6 @@ void _3d_cf_from_exp() {
   string rsubtask_me = "MixedEvent_3Dqn";
 
   // string wpath = "/Users/allenzhou/ALICE/scripts/femtoep";
-  string wpath = "/Users/allenzhou/ALICE/alidata/femtoep_res";
   string wfilename_main = "EP_dependence_CF_" + data_set;
   string wfilename_sub = "EP_dependence_CF_" + data_set + suffix;
   // string wfilename2 = "Check EP mixing 2";
@@ -1792,10 +1778,13 @@ void _3d_cf_from_exp() {
   //     {0.5, 0.7}, {0.7, 1.0}, {1.0, 1.5}};
   std::vector<std::pair<double, double>> centBins = {
       {0, 10}, {10, 30}, {30, 50}, {50, 80}, {80, 100}};
-  std::vector<std::pair<double, double>> mTBins = {
+  std::vector<std::pair<double, double>> mTBins_kt = {
       {0.4, 0.519},   {0.519, 0.812}, {0.812, 1.208},
       {1.208, 1.606}, {2.005, 2.504}, {2.504, 3.003},
       {3.004, 4.002}, {4.002, 5.002}, {5.002, 8.001}};
+  std::vector<std::pair<double, double>> mTBins_mt = {
+      {0.2, 0.3}, {0.3, 0.4}, {0.4, 0.5}, {0.5, 0.6}, {0.6, 0.7},
+      {0.7, 0.8}, {0.8, 1.0}, {1.0, 1.2}, {1.2, 1.6}, {1.6, 2}};
   //   std::vector<std::pair<double, double>> mTBins = {{0.244131, 0.331059},
   //                                                    {0.331059, 0.423792},
   //                                                    {0.423792, 0.51923},
@@ -1808,24 +1797,41 @@ void _3d_cf_from_exp() {
       {TMath::Pi() / 4, 3 * TMath::Pi() / 4, -1, -1, "Out_of_plane"}};
   std::vector<EPBin> epBins_me = {{{0, TMath::Pi(), -1, -1, "Min bias EP"}}};
 
-  bool doBuildCF3D = false;
+  bool doBuildCF3D = true;
   bool doFitDiag = false;
   bool doFitFull = true;
+  bool fitUseCoulomb = true;
+  bool fitUseCoreHaloLambda = true;
 
   std::vector<std::pair<double, double>> fitCentBins = {{0, 10}, {10, 30}};
-  std::vector<std::pair<double, double>> fitMTBins = {{0.4, 0.52},
-                                                      {0.52, 0.81}};
+
+  std::vector<std::pair<double, double>> fitMTBins_mt = {
+      {0.20, 0.30},
+      {0.30, 0.40},
+      {0.40, 0.50},
+  };
+  std::vector<std::pair<double, double>> fitMTBins_kt = {{0.4, 0.52},
+                                                         {0.52, 0.81}};
+
+  std::vector<std::pair<double, double>> fitMTBins = fitMTBins_mt;
+  std::vector<std::pair<double, double>> mTBins = mTBins_mt;
+
+  Levy3DFitOptions fitOptions;
+  fitOptions.useCoulomb = fitUseCoulomb;
+  fitOptions.useCoreHaloLambda = fitUseCoreHaloLambda;
+  fitOptions.fitQMax = 0.15;
+  const string fitOptionTag = BuildFitOptionTag(fitOptions);
 
   string fitInputPath = wpath;
   string fitInputFilename = wfilename;
-  string fitDiagOutput =
-      "EP_dependence_CF_fit_" + data_set + (kis_subwagon ? suffix : "");
-  string fitDiagTxt =
-      "EP_dependence_CF_fit_params_" + data_set + (kis_subwagon ? suffix : "");
-  string fitFullOutput =
-      "EP_dependence_CF_full_fit_" + data_set + (kis_subwagon ? suffix : "");
-  string fitFullTxt = "EP_dependence_CF_full_fit_params_" + data_set +
-                      (kis_subwagon ? suffix : "");
+  string fitDiagOutput = "EP_dependence_CF_fit_" + fitOptionTag + "_" +
+                         data_set + (kis_subwagon ? suffix : "");
+  string fitDiagTxt = "EP_dependence_CF_fit_params_" + fitOptionTag + "_" +
+                      data_set + (kis_subwagon ? suffix : "");
+  string fitFullOutput = "EP_dependence_CF_full_fit_" + fitOptionTag + "_" +
+                         data_set + (kis_subwagon ? suffix : "");
+  string fitFullTxt = "EP_dependence_CF_full_fit_params_" + fitOptionTag + "_" +
+                      data_set + (kis_subwagon ? suffix : "");
 
   //   CFCalcWith_Cent_Mt_pairphi_full(rpath, rfilename, rtaskname, rsubtask_se,
   //                                   rsubtask_me, wpath, wfilename, centBins,
@@ -1839,12 +1845,12 @@ void _3d_cf_from_exp() {
   if (doFitDiag) {
     FitCF3DWithSelectedBins(fitInputPath, fitInputFilename, wpath,
                             fitDiagOutput, fitDiagTxt, fitCentBins, fitMTBins,
-                            false, 0.15);
+                            false, fitOptions);
   }
 
   if (doFitFull) {
     FitCF3DWithSelectedBins(fitInputPath, fitInputFilename, wpath,
                             fitFullOutput, fitFullTxt, fitCentBins, fitMTBins,
-                            true, 0.15);
+                            true, fitOptions);
   }
 }
