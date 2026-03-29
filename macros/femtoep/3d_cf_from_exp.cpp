@@ -332,14 +332,35 @@ TH1D *BuildProjectionXWithinWindow(TH3D *hist, const string &name, double qMax);
 TH1D *BuildProjectionYWithinWindow(TH3D *hist, const string &name, double qMax);
 TH1D *BuildProjectionZWithinWindow(TH3D *hist, const string &name, double qMax);
 
+double IntegralVisibleRange(TH3D *hist, bool useWidth = false) {
+  if (!hist) {
+    return 0.0;
+  }
+  return hist->Integral(1, hist->GetNbinsX(), 1, hist->GetNbinsY(), 1,
+                        hist->GetNbinsZ(), useWidth ? "width" : "");
+}
+
 void Write1DProjections(TH3D *hCF, TDirectory *dir, const string &baseName,
-                        const string &yTitle = "C(q)") {
-  auto hProjX = BuildProjectionXWithinWindow(hCF, baseName + "_ProjX",
-                                             kProjection1DWindow);
-  auto hProjY = BuildProjectionYWithinWindow(hCF, baseName + "_ProjY",
-                                             kProjection1DWindow);
-  auto hProjZ = BuildProjectionZWithinWindow(hCF, baseName + "_ProjZ",
-                                             kProjection1DWindow);
+                        const string &yTitle = "C(q)", bool useWindow = true) {
+  TH1D *hProjX = nullptr;
+  TH1D *hProjY = nullptr;
+  TH1D *hProjZ = nullptr;
+
+  if (useWindow) {
+    hProjX = BuildProjectionXWithinWindow(hCF, baseName + "_ProjX",
+                                          kProjection1DWindow);
+    hProjY = BuildProjectionYWithinWindow(hCF, baseName + "_ProjY",
+                                          kProjection1DWindow);
+    hProjZ = BuildProjectionZWithinWindow(hCF, baseName + "_ProjZ",
+                                          kProjection1DWindow);
+  } else {
+    hProjX = hCF->ProjectionX((baseName + "_ProjX").c_str(), 1,
+                              hCF->GetNbinsY(), 1, hCF->GetNbinsZ());
+    hProjY = hCF->ProjectionY((baseName + "_ProjY").c_str(), 1,
+                              hCF->GetNbinsX(), 1, hCF->GetNbinsZ());
+    hProjZ = hCF->ProjectionZ((baseName + "_ProjZ").c_str(), 1,
+                              hCF->GetNbinsX(), 1, hCF->GetNbinsY());
+  }
 
   string hProjXName = baseName + "_ProjX";
   hProjX->SetName(hProjXName.c_str());
@@ -402,8 +423,10 @@ void CFCalc3D(string rpath, string rfilename, string taskname,
     return;
   }
   auto hSE_sparse = (THnSparseF *)hSE_sparse_origin->Clone();
+  auto hSE_sparse_allphi = (THnSparseF *)hSE_sparse_origin->Clone();
   auto hME_sparse = (THnSparseF *)hME_sparse_origin->Clone();
   hSE_sparse->Sumw2();
+  hSE_sparse_allphi->Sumw2();
   hME_sparse->Sumw2();
 
   auto ax_phi = hSE_sparse->GetAxis(6);
@@ -424,13 +447,15 @@ void CFCalc3D(string rpath, string rfilename, string taskname,
       hSE_sparse->GetAxis(4)->SetRangeUser(centLow, centHigh);
       hSE_sparse->GetAxis(3)->SetRangeUser(mTLow, mTHigh);
 
+      hSE_sparse_allphi->GetAxis(4)->SetRangeUser(centLow, centHigh);
+      hSE_sparse_allphi->GetAxis(3)->SetRangeUser(mTLow, mTHigh);
+
       hME_sparse->GetAxis(4)->SetRangeUser(centLow, centHigh);
       hME_sparse->GetAxis(3)->SetRangeUser(mTLow, mTHigh);
-      hME_sparse->GetAxis(6)->SetRange(0, 0);
 
       auto hME_norm = (TH3D *)hME_sparse->Projection(0, 1, 2);
       hME_norm->SetDirectory(nullptr);
-      const double intME = hME_norm->Integral("width");
+      const double intME = IntegralVisibleRange(hME_norm, true);
       if (intME == 0.0) {
         cout << "WARNING: zero mixed-event integral for " << baseName << endl;
         delete hME_norm;
@@ -438,65 +463,23 @@ void CFCalc3D(string rpath, string rfilename, string taskname,
       }
       hME_norm->Scale(1.0 / intME);
 
-      // 遍历 pair-phi bin（只取一半，做 folding）
-      for (int i = 1; i <= nPhiBins; ++i) {
-
-        double phi = ax_phi->GetBinCenter(i);
-
-        // 只处理 [0, pi/2]
-        if (phi > TMath::Pi() / 2.)
-          continue;
-
-        // 找对称 bin（pi - phi）
-        double phi_sym = TMath::Pi() - phi;
-        int j = ax_phi->FindBin(phi_sym);
-
-        // -------- SE --------
-        hSE_sparse->GetAxis(6)->SetRange(i, i);
-        auto hSE_a = (TH3D *)hSE_sparse->Projection(0, 1, 2);
-        hSE_a->SetDirectory(nullptr);
-
-        hSE_sparse->GetAxis(6)->SetRange(j, j);
-        auto hSE_b = (TH3D *)hSE_sparse->Projection(0, 1, 2);
-        hSE_b->SetDirectory(nullptr);
-
-        hSE_a->Add(hSE_b);
-
-        // -------- 归一化（关键：分别归一）--------
-        double intSE = hSE_a->Integral("width");
-
-        if (intSE == 0.0) {
-          cout << "WARNING: zero integral, skip bin " << i << endl;
-          delete hSE_a;
-          delete hSE_b;
-          continue;
-        }
-
-        hSE_a->Scale(1.0 / intSE);
-
-        // -------- 命名 --------
-        double phi_mapped = phi; // 对应 [-pi/2, pi/2] 的正半区
-
-        string hname =
-            baseName + "_phi=" + doubleToString(phi_mapped, 2) + "_CF3D";
+      auto writeStoredSlice = [&](TH3D *hSE_norm, const string &hname) {
         string hSEName = hname + "_SE_norm3d";
         string hMEName = hname + "_ME_norm3d";
 
-        hSE_a->SetName(hSEName.c_str());
-        hSE_a->SetTitle(hSEName.c_str());
+        hSE_norm->SetName(hSEName.c_str());
+        hSE_norm->SetTitle(hSEName.c_str());
 
         auto hMEStored = (TH3D *)hME_norm->Clone(hMEName.c_str());
         hMEStored->SetDirectory(nullptr);
         hMEStored->SetTitle(hMEName.c_str());
 
-        // -------- CF --------
-        auto hCF = (TH3D *)hSE_a->Clone(hname.c_str());
+        auto hCF = (TH3D *)hSE_norm->Clone(hname.c_str());
         hCF->SetDirectory(nullptr);
         hCF->Divide(hMEStored);
 
         hCF->SetName(hname.c_str());
         hCF->SetTitle(hname.c_str());
-
         hCF->GetXaxis()->SetTitle("q_{out} (GeV/c)");
         hCF->GetYaxis()->SetTitle("q_{side} (GeV/c)");
         hCF->GetZaxis()->SetTitle("q_{long} (GeV/c)");
@@ -508,28 +491,68 @@ void CFCalc3D(string rpath, string rfilename, string taskname,
           delete wf;
           delete hCF;
           delete hMEStored;
-          delete hSE_a;
-          delete hSE_b;
-          continue;
+          return;
         }
 
         auto dir = wf->GetDirectory(hname.c_str());
         if (!dir) {
           dir = wf->mkdir(hname.c_str());
         }
-        dir->WriteObject(hSE_a, hSEName.c_str());
-        Write1DProjections(hSE_a, dir, hSEName, "Normalized density");
+        dir->WriteObject(hSE_norm, hSEName.c_str());
+        Write1DProjections(hSE_norm, dir, hSEName, "Normalized density", true);
         dir->WriteObject(hMEStored, hMEName.c_str());
-        Write1DProjections(hMEStored, dir, hMEName, "Normalized density");
+        Write1DProjections(hMEStored, dir, hMEName, "Normalized density", true);
         dir->WriteObject(hCF, hname.c_str());
-        Write1DProjections(hCF, dir, hname, "C(q)");
+        Write1DProjections(hCF, dir, hname, "C(q)", true);
         wf->Close();
         delete wf;
-
         delete hCF;
         delete hMEStored;
+      };
+
+      auto hSE_all = (TH3D *)hSE_sparse_allphi->Projection(0, 1, 2);
+      hSE_all->SetDirectory(nullptr);
+      const double intSEAll = IntegralVisibleRange(hSE_all, true);
+      if (intSEAll == 0.0) {
+        cout << "WARNING: zero same-event integral for " << baseName
+             << " phi=all" << endl;
+      } else {
+        hSE_all->Scale(1.0 / intSEAll);
+        writeStoredSlice(hSE_all, baseName + "_phi=all_CF3D");
+      }
+      delete hSE_all;
+
+      // 遍历 pair-phi bin，并把 (pi/2, pi) 映射到 (-pi/2, 0)
+      for (int i = 1; i <= nPhiBins; ++i) {
+
+        double phi = ax_phi->GetBinCenter(i);
+
+        // -------- SE --------
+        hSE_sparse->GetAxis(6)->SetRange(i, i);
+        auto hSE_a = (TH3D *)hSE_sparse->Projection(0, 1, 2);
+        hSE_a->SetDirectory(nullptr);
+
+        // -------- 归一化（关键：分别归一）--------
+        double intSE = IntegralVisibleRange(hSE_a, true);
+
+        if (intSE == 0.0) {
+          cout << "WARNING: zero integral, skip bin " << i << endl;
+          delete hSE_a;
+          continue;
+        }
+
+        hSE_a->Scale(1.0 / intSE);
+
+        // -------- 命名并写出 --------
+        double phi_mapped = phi;
+        if (phi > TMath::Pi() / 2.) {
+          phi_mapped -= TMath::Pi();
+        }
+        string hname =
+            baseName + "_phi=" + doubleToString(phi_mapped, 2) + "_CF3D";
+        writeStoredSlice(hSE_a, hname);
+
         delete hSE_a;
-        delete hSE_b;
       }
 
       delete hME_norm;
@@ -538,6 +561,7 @@ void CFCalc3D(string rpath, string rfilename, string taskname,
 
   rf->Close();
   delete hSE_sparse;
+  delete hSE_sparse_allphi;
   delete hME_sparse;
   delete rf;
   cout << "3D CF results have been written to " << wpath << "/" << wfilename
@@ -554,6 +578,7 @@ struct Levy3DFitResult {
   double mTLow = 0.;
   double mTHigh = 0.;
   double phi = 0.;
+  bool isPhiIntegrated = false;
   double norm = 0.;
   double normErr = 0.;
   double lambda = 0.;
@@ -606,7 +631,24 @@ bool ParseCF3DHistogramName(const string &histName, Levy3DFitResult &result) {
 
   int matched = sscanf(histName.c_str(), "cent=%d-%d_mT=%lf-%lf_phi=%lf_CF3D",
                        &centLow, &centHigh, &mTLow, &mTHigh, &phi);
-  if (matched != 5) {
+  if (matched == 5) {
+    result.histName = histName;
+    result.centLow = centLow;
+    result.centHigh = centHigh;
+    result.mTLow = mTLow;
+    result.mTHigh = mTHigh;
+    result.phi = phi;
+    result.isPhiIntegrated = false;
+    result.groupKey = "cent=" + to_string(centLow) + "-" + to_string(centHigh) +
+                      "_mT=" + doubleToString(mTLow, 2) + "-" +
+                      doubleToString(mTHigh, 2);
+    return true;
+  }
+
+  int matchedAll =
+      sscanf(histName.c_str(), "cent=%d-%d_mT=%lf-%lf_phi=all_CF3D", &centLow,
+             &centHigh, &mTLow, &mTHigh);
+  if (matchedAll != 4) {
     return false;
   }
 
@@ -615,7 +657,8 @@ bool ParseCF3DHistogramName(const string &histName, Levy3DFitResult &result) {
   result.centHigh = centHigh;
   result.mTLow = mTLow;
   result.mTHigh = mTHigh;
-  result.phi = phi;
+  result.phi = -1.0;
+  result.isPhiIntegrated = true;
   result.groupKey = "cent=" + to_string(centLow) + "-" + to_string(centHigh) +
                     "_mT=" + doubleToString(mTLow, 2) + "-" +
                     doubleToString(mTHigh, 2);
@@ -830,21 +873,39 @@ TH1D *BuildProjectionXWithinWindow(TH3D *hist, const string &name,
                                    double qMax) {
   auto [yMin, yMax] = GetAxisRangeForWindow(hist->GetYaxis(), qMax);
   auto [zMin, zMax] = GetAxisRangeForWindow(hist->GetZaxis(), qMax);
-  return hist->ProjectionX(name.c_str(), yMin, yMax, zMin, zMax);
+  auto hProj = hist->ProjectionX(name.c_str(), yMin, yMax, zMin, zMax);
+  const int nWindowBins =
+      std::max(0, yMax - yMin + 1) * std::max(0, zMax - zMin + 1);
+  if (nWindowBins > 0) {
+    hProj->Scale(1.0 / static_cast<double>(nWindowBins));
+  }
+  return hProj;
 }
 
 TH1D *BuildProjectionYWithinWindow(TH3D *hist, const string &name,
                                    double qMax) {
   auto [xMin, xMax] = GetAxisRangeForWindow(hist->GetXaxis(), qMax);
   auto [zMin, zMax] = GetAxisRangeForWindow(hist->GetZaxis(), qMax);
-  return hist->ProjectionY(name.c_str(), xMin, xMax, zMin, zMax);
+  auto hProj = hist->ProjectionY(name.c_str(), xMin, xMax, zMin, zMax);
+  const int nWindowBins =
+      std::max(0, xMax - xMin + 1) * std::max(0, zMax - zMin + 1);
+  if (nWindowBins > 0) {
+    hProj->Scale(1.0 / static_cast<double>(nWindowBins));
+  }
+  return hProj;
 }
 
 TH1D *BuildProjectionZWithinWindow(TH3D *hist, const string &name,
                                    double qMax) {
   auto [xMin, xMax] = GetAxisRangeForWindow(hist->GetXaxis(), qMax);
   auto [yMin, yMax] = GetAxisRangeForWindow(hist->GetYaxis(), qMax);
-  return hist->ProjectionZ(name.c_str(), xMin, xMax, yMin, yMax);
+  auto hProj = hist->ProjectionZ(name.c_str(), xMin, xMax, yMin, yMax);
+  const int nWindowBins =
+      std::max(0, xMax - xMin + 1) * std::max(0, yMax - yMin + 1);
+  if (nWindowBins > 0) {
+    hProj->Scale(1.0 / static_cast<double>(nWindowBins));
+  }
+  return hProj;
 }
 
 void StyleProjectionHistogram(TH1D *hist, int color, int markerStyle,
@@ -989,24 +1050,18 @@ void WriteR2Graphs(TFile *wf, const vector<Levy3DFitResult> &results);
 TH3D *BuildCFHistogramFromSparse(THnSparseF *hSE_sparse, THnSparseF *hME_sparse,
                                  int phiBin, int phiBinSym,
                                  const string &histName) {
+  (void)phiBinSym;
   hSE_sparse->GetAxis(6)->SetRange(phiBin, phiBin);
   auto hSE_a = (TH3D *)hSE_sparse->Projection(0, 1, 2);
   hSE_a->SetDirectory(nullptr);
 
-  hSE_sparse->GetAxis(6)->SetRange(phiBinSym, phiBinSym);
-  auto hSE_b = (TH3D *)hSE_sparse->Projection(0, 1, 2);
-  hSE_b->SetDirectory(nullptr);
-  hSE_a->Add(hSE_b);
-
-  hME_sparse->GetAxis(6)->SetRange(0, 0);
   auto hME_a = (TH3D *)hME_sparse->Projection(0, 1, 2);
   hME_a->SetDirectory(nullptr);
 
-  const double intSE = hSE_a->Integral("width");
-  const double intME = hME_a->Integral("width");
+  const double intSE = IntegralVisibleRange(hSE_a, true);
+  const double intME = IntegralVisibleRange(hME_a, true);
   if (intSE == 0.0 || intME == 0.0) {
     delete hSE_a;
-    delete hSE_b;
     delete hME_a;
     return nullptr;
   }
@@ -1023,7 +1078,6 @@ TH3D *BuildCFHistogramFromSparse(THnSparseF *hSE_sparse, THnSparseF *hME_sparse,
   hCF->GetZaxis()->SetTitle("q_{long} (GeV/c)");
 
   delete hSE_a;
-  delete hSE_b;
   delete hME_a;
   return hCF;
 }
@@ -1275,8 +1329,9 @@ void WriteFitResultsSummary(const string &txtPath,
                             const vector<Levy3DFitResult> &results) {
   ofstream out(txtPath);
   out << "# fitModel usesCoulomb usesCoreHaloLambda histName centLow centHigh "
-         "mTLow mTHigh phi norm normErr lambda lambdaErr Rout2 Rout2Err "
-         "Rside2 Rside2Err Rlong2 Rlong2Err Routside2 Routside2Err "
+         "mTLow mTHigh phi isPhiIntegrated norm normErr lambda lambdaErr "
+         "Rout2 Rout2Err Rside2 Rside2Err Rlong2 Rlong2Err Routside2 "
+         "Routside2Err "
          "Routlong2 Routlong2Err Rsidelong2 Rsidelong2Err alpha alphaErr "
          "chi2 ndf status\n";
   out << std::fixed << std::setprecision(6);
@@ -1285,12 +1340,13 @@ void WriteFitResultsSummary(const string &txtPath,
     out << result.fitModel << " " << (result.usesCoulomb ? 1 : 0) << " "
         << (result.usesCoreHaloLambda ? 1 : 0) << " " << result.histName << " "
         << result.centLow << " " << result.centHigh << " " << result.mTLow
-        << " " << result.mTHigh << " " << result.phi << " " << result.norm
-        << " " << result.normErr << " " << result.lambda << " "
-        << result.lambdaErr << " " << result.rout2 << " " << result.rout2Err
-        << " " << result.rside2 << " " << result.rside2Err << " "
-        << result.rlong2 << " " << result.rlong2Err << " " << result.routside2
-        << " " << result.routside2Err << " " << result.routlong2 << " "
+        << " " << result.mTHigh << " " << result.phi << " "
+        << (result.isPhiIntegrated ? 1 : 0) << " " << result.norm << " "
+        << result.normErr << " " << result.lambda << " " << result.lambdaErr
+        << " " << result.rout2 << " " << result.rout2Err << " " << result.rside2
+        << " " << result.rside2Err << " " << result.rlong2 << " "
+        << result.rlong2Err << " " << result.routside2 << " "
+        << result.routside2Err << " " << result.routlong2 << " "
         << result.routlong2Err << " " << result.rsidelong2 << " "
         << result.rsidelong2Err << " " << result.alpha << " " << result.alphaErr
         << " " << result.chi2 << " " << result.ndf << " " << result.status
@@ -1301,6 +1357,9 @@ void WriteFitResultsSummary(const string &txtPath,
 void WriteR2Graphs(TFile *wf, const vector<Levy3DFitResult> &results) {
   map<string, vector<Levy3DFitResult>> groupedResults;
   for (const auto &result : results) {
+    if (result.isPhiIntegrated) {
+      continue;
+    }
     groupedResults[result.groupKey].push_back(result);
   }
 
@@ -1308,6 +1367,9 @@ void WriteR2Graphs(TFile *wf, const vector<Levy3DFitResult> &results) {
   graphDir->cd();
 
   for (auto &[groupKey, groupResults] : groupedResults) {
+    if (groupResults.empty()) {
+      continue;
+    }
     sort(groupResults.begin(), groupResults.end(),
          [](const Levy3DFitResult &lhs, const Levy3DFitResult &rhs) {
            return lhs.phi < rhs.phi;
@@ -1366,18 +1428,21 @@ void WriteR2Graphs(TFile *wf, const vector<Levy3DFitResult> &results) {
       }
     }
 
-    auto fitCosRout2 = new TF1((groupKey + "_Rout2_phi_fit").c_str(),
-                               "[0]+2.0*[1]*cos(2.0*x)", 0., TMath::Pi() / 2.);
+    auto fitCosRout2 =
+        new TF1((groupKey + "_Rout2_phi_fit").c_str(), "[0]+2.0*[1]*cos(2.0*x)",
+                -TMath::Pi() / 2., TMath::Pi() / 2.);
     fitCosRout2->SetParNames("Rout2_0", "Rout2_2");
     fitCosRout2->SetParameters(groupResults.front().rout2, 0.0);
 
-    auto fitCosRside2 = new TF1((groupKey + "_Rside2_phi_fit").c_str(),
-                                "[0]+2.0*[1]*cos(2.0*x)", 0., TMath::Pi() / 2.);
+    auto fitCosRside2 =
+        new TF1((groupKey + "_Rside2_phi_fit").c_str(),
+                "[0]+2.0*[1]*cos(2.0*x)", -TMath::Pi() / 2., TMath::Pi() / 2.);
     fitCosRside2->SetParNames("Rside2_0", "Rside2_2");
     fitCosRside2->SetParameters(groupResults.front().rside2, 0.0);
 
-    auto fitCosRlong2 = new TF1((groupKey + "_Rlong2_phi_fit").c_str(),
-                                "[0]+2.0*[1]*cos(2.0*x)", 0., TMath::Pi() / 2.);
+    auto fitCosRlong2 =
+        new TF1((groupKey + "_Rlong2_phi_fit").c_str(),
+                "[0]+2.0*[1]*cos(2.0*x)", -TMath::Pi() / 2., TMath::Pi() / 2.);
     fitCosRlong2->SetParNames("Rlong2_0", "Rlong2_2");
     fitCosRlong2->SetParameters(groupResults.front().rlong2, 0.0);
 
@@ -1386,31 +1451,33 @@ void WriteR2Graphs(TFile *wf, const vector<Levy3DFitResult> &results) {
     TF1 *fitSinRsidelong2 = nullptr;
     if (hasOffDiagonal) {
       fitSinRoutside2 = new TF1((groupKey + "_Routside2_phi_fit").c_str(),
-                                "[0]+2.0*[1]*sin(2.0*x)", 0., TMath::Pi() / 2.);
+                                "[0]+2.0*[1]*sin(2.0*x)", -TMath::Pi() / 2.,
+                                TMath::Pi() / 2.);
       fitSinRoutside2->SetParNames("Routside2_0", "Routside2_2");
       fitSinRoutside2->SetParameters(groupResults.front().routside2, 0.0);
 
       fitCosRoutlong2 = new TF1((groupKey + "_Routlong2_phi_fit").c_str(),
-                                "[0]+2.0*[1]*cos(2.0*x)", 0., TMath::Pi() / 2.);
+                                "[0]+2.0*[1]*cos(2.0*x)", -TMath::Pi() / 2.,
+                                TMath::Pi() / 2.);
       fitCosRoutlong2->SetParNames("Routlong2_0", "Routlong2_2");
       fitCosRoutlong2->SetParameters(groupResults.front().routlong2, 0.0);
 
-      fitSinRsidelong2 =
-          new TF1((groupKey + "_Rsidelong2_phi_fit").c_str(),
-                  "[0]+2.0*[1]*sin(2.0*x)", 0., TMath::Pi() / 2.);
+      fitSinRsidelong2 = new TF1((groupKey + "_Rsidelong2_phi_fit").c_str(),
+                                 "[0]+2.0*[1]*sin(2.0*x)", -TMath::Pi() / 2.,
+                                 TMath::Pi() / 2.);
       fitSinRsidelong2->SetParNames("Rsidelong2_0", "Rsidelong2_2");
       fitSinRsidelong2->SetParameters(groupResults.front().rsidelong2, 0.0);
     }
 
     auto fitConstAlpha = new TF1((groupKey + "_alpha_phi_fit").c_str(), "[0]",
-                                 0., TMath::Pi() / 2.);
+                                 -TMath::Pi() / 2., TMath::Pi() / 2.);
     fitConstAlpha->SetParName(0, "alpha0");
     fitConstAlpha->SetParameter(0, groupResults.front().alpha);
 
     TF1 *fitConstLambda = nullptr;
     if (usesCoreHaloLambda) {
       fitConstLambda = new TF1((groupKey + "_lambda_phi_fit").c_str(), "[0]",
-                               0., TMath::Pi() / 2.);
+                               -TMath::Pi() / 2., TMath::Pi() / 2.);
       fitConstLambda->SetParName(0, "lambda0");
       fitConstLambda->SetParameter(0, groupResults.front().lambda);
     }
@@ -1707,9 +1774,10 @@ void _3d_cf_from_exp() {
   // string data_set = "23zzh_pass5_small_t3";
   // string data_set = "23zzh_pass5_small_dbgt4";
   // string data_set = "23zzh_pass5_small_noepmix";
+  string data_set = "23zzh_pass5_medium";
 
-  //   string data_set = "25ae_pass2";
-  string data_set = "25ae_pass2_test2";
+  // string data_set = "25ae_pass2";
+  // string data_set = "25ae_pass2_test";
   // string data_set = "25ae_pass2_noepmix";
   // string data_set = "25ae_pass2_noepmix_moremult";
   // string data_set = "25ae_pass2_epmix";
@@ -1726,8 +1794,8 @@ void _3d_cf_from_exp() {
 
   // enum system = {"PbPb", "OO"}; forbidden
   //   string rpath = rpath_pbpb;
-  bool kisoo = 1;
-  bool kispbpb = 0;
+  bool kisoo = 0;
+  bool kispbpb = 1;
 
   if (kisoo && kispbpb) {
     cout << "ERROR: both kisoo and kispbpb cannot be true at the same time."
@@ -1778,10 +1846,16 @@ void _3d_cf_from_exp() {
   //     {0.5, 0.7}, {0.7, 1.0}, {1.0, 1.5}};
   std::vector<std::pair<double, double>> centBins = {
       {0, 10}, {10, 30}, {30, 50}, {50, 80}, {80, 100}};
-  std::vector<std::pair<double, double>> mTBins_kt = {
-      {0.4, 0.519},   {0.519, 0.812}, {0.812, 1.208},
-      {1.208, 1.606}, {2.005, 2.504}, {2.504, 3.003},
-      {3.004, 4.002}, {4.002, 5.002}, {5.002, 8.001}};
+  // std::vector<std::pair<double, double>> mTBins_kt = {{0.423, 8.001}};
+  std::vector<std::pair<double, double>> mTBins_kt = {{0.244131, 0.331059},
+                                                      {0.331059, 0.423792},
+                                                      {0.423792, 0.51923},
+                                                      {0.51923, 0.713863},
+                                                      {0.244131, 0.713863}};
+  // std::vector<std::pair<double, double>> mTBins_kt = {
+  //     {0.423, 0.519}, {0.519, 0.812}, {0.812, 1.208},
+  //     {1.208, 1.606}, {2.005, 2.504}, {2.504, 3.003},
+  //     {3.004, 4.002}, {4.002, 5.002}, {5.002, 8.001}};
   std::vector<std::pair<double, double>> mTBins_mt = {
       {0.2, 0.3}, {0.3, 0.4}, {0.4, 0.5}, {0.5, 0.6}, {0.6, 0.7},
       {0.7, 0.8}, {0.8, 1.0}, {1.0, 1.2}, {1.2, 1.6}, {1.6, 2}};
@@ -1799,22 +1873,25 @@ void _3d_cf_from_exp() {
 
   bool doBuildCF3D = true;
   bool doFitDiag = false;
-  bool doFitFull = true;
+  bool doFitFull = false;
   bool fitUseCoulomb = true;
   bool fitUseCoreHaloLambda = true;
 
   std::vector<std::pair<double, double>> fitCentBins = {{0, 10}, {10, 30}};
-
+  // 下面mtbin留两位数就行
   std::vector<std::pair<double, double>> fitMTBins_mt = {
       {0.20, 0.30},
       {0.30, 0.40},
       {0.40, 0.50},
   };
-  std::vector<std::pair<double, double>> fitMTBins_kt = {{0.4, 0.52},
-                                                         {0.52, 0.81}};
+  // std::vector<std::pair<double, double>> fitMTBins_kt = {{0.42, 0.81}};
+  // std::vector<std::pair<double, double>> fitMTBins_kt = {{0.42, 0.52},
+  //                                                        {0.52, 0.81}};
+  std::vector<std::pair<double, double>> fitMTBins_kt = {
+      {0.42, 0.52}, {0.52, 0.71}, {0.24, 0.71}};
 
-  std::vector<std::pair<double, double>> fitMTBins = fitMTBins_mt;
-  std::vector<std::pair<double, double>> mTBins = mTBins_mt;
+  std::vector<std::pair<double, double>> fitMTBins = fitMTBins_kt;
+  std::vector<std::pair<double, double>> mTBins = mTBins_kt;
 
   Levy3DFitOptions fitOptions;
   fitOptions.useCoulomb = fitUseCoulomb;
