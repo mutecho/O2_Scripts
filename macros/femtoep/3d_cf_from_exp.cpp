@@ -19,6 +19,7 @@
 #include "TTree.h"
 #include <TAxis.h>
 #include <TCanvas.h>
+#include <TDirectory.h>
 #include <TFile.h>
 #include <TGraph.h>
 #include <TGraphErrors.h>
@@ -29,6 +30,7 @@
 #include <TMinuit.h>
 #include <TPad.h>
 #include <TPaveText.h>
+#include <TROOT.h>
 
 using namespace std;
 
@@ -82,8 +84,10 @@ struct Levy3DFitResult {
   double baselineQ2 = 0.;
   double baselineQ2Err = 0.;
   double chi2 = 0.;
+  double edm = -1.;
   int ndf = 0;
   int status = -1;
+  int minuitIstat = -1;
   bool hasOffDiagonal = false;
   bool usesCoulomb = false;
   bool usesCoreHaloLambda = true;
@@ -109,6 +113,12 @@ constexpr double kHbarC = 0.1973269804;
 // Like-sign pion-pion Bohr radius in fm, used by the simple Gamow-factor
 // approximation for Coulomb correction.
 constexpr double kPiPiLikeSignBohrRadiusFm = 387.5;
+
+// Numerical guardrails for the full 3D Levy model and the PML objective.
+constexpr double kFullR2MatrixTolerance = 1e-10;
+constexpr double kLevyArgumentTolerance = 1e-12;
+constexpr double kInvalidFullModelCFValue = 1e6;
+constexpr double kFitPenaltyValue = 1e30;
 
 //==============================================================================
 // Generic ROOT/File Utilities
@@ -175,6 +185,29 @@ std::string doubleToString(double x, int precision = 2) {
   std::stringstream ss;
   ss << std::fixed << std::setprecision(precision) << x;
   return ss.str();
+}
+
+TFile *OpenOutputROOTFileForUpdate(const string &path, const string &filename,
+                                   const string &purpose) {
+  auto wf = GetROOT(path, filename, "update");
+  if (!wf || wf->IsZombie()) {
+    cout << "ERROR: cannot " << purpose << " " << path << "/" << filename
+         << ".root" << endl;
+    delete wf;
+    return nullptr;
+  }
+  return wf;
+}
+
+TDirectory *GetOrCreateOutputDirectory(TFile *wf, const string &dirName) {
+  if (!wf) {
+    return nullptr;
+  }
+  auto dir = wf->GetDirectory(dirName.c_str());
+  if (!dir) {
+    dir = wf->mkdir(dirName.c_str());
+  }
+  return dir;
 }
 
 //==============================================================================
@@ -501,7 +534,8 @@ void CFCalc3D(string rpath, string rfilename, string taskname,
               string wfilename, std::vector<std::pair<double, double>> centBins,
               std::vector<std::pair<double, double>> mTBins,
               bool mapPairPhiToSymmetricRange = true,
-              bool writeNormalizedSEME1DProjections = false) {
+              bool writeNormalizedSEME1DProjections = false,
+              bool reopenOutputFilePerSlice = true) {
   const bool oldAddDirectory = TH1::AddDirectoryStatus();
   TH1::AddDirectory(kFALSE);
 
@@ -541,6 +575,21 @@ void CFCalc3D(string rpath, string rfilename, string taskname,
 
   auto ax_phi = hSE_sparse->GetAxis(6);
   int nPhiBins = ax_phi->GetNbins();
+  TFile *sharedOutputFile = nullptr;
+  if (!reopenOutputFilePerSlice) {
+    sharedOutputFile =
+        OpenOutputROOTFileForUpdate(wpath, wfilename,
+                                    "reuse output ROOT file during CF building");
+    if (!sharedOutputFile) {
+      rf->Close();
+      delete hSE_sparse;
+      delete hSE_sparse_allphi;
+      delete hME_sparse;
+      delete rf;
+      TH1::AddDirectory(oldAddDirectory);
+      return;
+    }
+  }
 
   cout << "Starting 3D CF calculation..." << endl;
 
@@ -599,19 +648,28 @@ void CFCalc3D(string rpath, string rfilename, string taskname,
         hCF->GetYaxis()->SetTitle("q_{side} (GeV/c)");
         hCF->GetZaxis()->SetTitle("q_{long} (GeV/c)");
 
-        auto wf = GetROOT(wpath, wfilename, "update");
+        TFile *wf = sharedOutputFile;
+        const bool ownsOutputFile = (wf == nullptr);
+        if (ownsOutputFile) {
+          wf = OpenOutputROOTFileForUpdate(wpath, wfilename,
+                                           "update output ROOT file");
+        }
         if (!wf || wf->IsZombie()) {
-          cout << "ERROR: cannot update output ROOT file " << wpath << "/"
-               << wfilename << ".root" << endl;
-          delete wf;
           delete hCF;
           delete hMERawStored;
           return;
         }
 
-        auto dir = wf->GetDirectory(hname.c_str());
+        auto dir = GetOrCreateOutputDirectory(wf, hname);
         if (!dir) {
-          dir = wf->mkdir(hname.c_str());
+          cout << "ERROR: cannot create output directory " << hname << endl;
+          if (ownsOutputFile) {
+            wf->Close();
+            delete wf;
+          }
+          delete hCF;
+          delete hMERawStored;
+          return;
         }
         dir->WriteObject(hSE_raw, hSERawName.c_str());
         dir->WriteObject(hMERawStored, hMERawName.c_str());
@@ -623,8 +681,12 @@ void CFCalc3D(string rpath, string rfilename, string taskname,
         }
         dir->WriteObject(hCF, hname.c_str());
         Write1DProjections(hCF, dir, hname, "C(q)", true);
-        wf->Close();
-        delete wf;
+        if (ownsOutputFile) {
+          wf->Close();
+          delete wf;
+        } else {
+          wf->cd();
+        }
         delete hCF;
         delete hMERawStored;
       };
@@ -688,6 +750,10 @@ void CFCalc3D(string rpath, string rfilename, string taskname,
     }
   }
 
+  if (sharedOutputFile) {
+    sharedOutputFile->Close();
+    delete sharedOutputFile;
+  }
   rf->Close();
   delete hSE_sparse;
   delete hSE_sparse_allphi;
@@ -867,6 +933,38 @@ double ComputeQ2BaselineFactor(double qOut, double qSide, double qLong,
   return 1.0 + baselineQ2 * q2;
 }
 
+bool IsFullR2MatrixPositiveSemiDefinite(double rout2, double rside2,
+                                        double rlong2, double routside2,
+                                        double routlong2, double rsidelong2,
+                                        double tolerance =
+                                            kFullR2MatrixTolerance) {
+  if (rout2 < -tolerance || rside2 < -tolerance || rlong2 < -tolerance) {
+    return false;
+  }
+
+  const double detOutSide = rout2 * rside2 - routside2 * routside2;
+  const double detOutLong = rout2 * rlong2 - routlong2 * routlong2;
+  const double detSideLong = rside2 * rlong2 - rsidelong2 * rsidelong2;
+  if (detOutSide < -tolerance || detOutLong < -tolerance ||
+      detSideLong < -tolerance) {
+    return false;
+  }
+
+  const double determinant =
+      rout2 * (rside2 * rlong2 - rsidelong2 * rsidelong2) -
+      routside2 * (routside2 * rlong2 - routlong2 * rsidelong2) +
+      routlong2 * (routside2 * rsidelong2 - routlong2 * rside2);
+  return determinant >= -tolerance;
+}
+
+bool HasValidFullR2MatrixFromParameterArray(const double *par) {
+  if (!par) {
+    return false;
+  }
+  return IsFullR2MatrixPositiveSemiDefinite(par[2], par[3], par[4], par[5],
+                                            par[6], par[7]);
+}
+
 double EvaluateDiagonalLevyCF(double qOut, double qSide, double qLong,
                               double norm, double lambda, double rout2,
                               double rside2, double rlong2, double alpha,
@@ -891,12 +989,20 @@ double EvaluateFullLevyCF(double qOut, double qSide, double qLong, double norm,
                           double rlong2, double routside2, double routlong2,
                           double rsidelong2, double alpha, double baselineQ2,
                           const Levy3DFitOptions &fitOptions) {
+  if (!IsFullR2MatrixPositiveSemiDefinite(rout2, rside2, rlong2, routside2,
+                                          routlong2, rsidelong2)) {
+    return kInvalidFullModelCFValue;
+  }
   const double argument =
       (rout2 * qOut * qOut + rside2 * qSide * qSide + rlong2 * qLong * qLong +
        2.0 * routside2 * qOut * qSide + 2.0 * routlong2 * qOut * qLong +
        2.0 * rsidelong2 * qSide * qLong) /
       (kHbarC * kHbarC);
-  const double levyExponent = std::pow(std::max(argument, 0.0), alpha / 2.0);
+  if (argument < -kLevyArgumentTolerance) {
+    return kInvalidFullModelCFValue;
+  }
+  const double protectedArgument = argument < 0.0 ? 0.0 : argument;
+  const double levyExponent = std::pow(protectedArgument, alpha / 2.0);
   const double femtoValue = ComputeBowlerSinyukovLikeSignPiPiValue(
       norm, lambda, levyExponent, fitOptions.useCoulomb,
       fitOptions.useCoreHaloLambda, qOut, qSide, qLong);
@@ -1259,6 +1365,36 @@ string BuildFitSwitchLine(const Levy3DFitResult &fitResult) {
          ", q^{2} baseline: " + (fitResult.usesQ2Baseline ? "on" : "off");
 }
 
+string DescribeCovarianceQuality(int istat) {
+  switch (istat) {
+  case 0:
+    return "not available";
+  case 1:
+    return "approximate";
+  case 2:
+    return "forced pos-def";
+  case 3:
+    return "full, accurate";
+  default:
+    return "not applicable";
+  }
+}
+
+string CovarianceQualityToken(int istat) {
+  switch (istat) {
+  case 0:
+    return "not_available";
+  case 1:
+    return "approximate";
+  case 2:
+    return "forced_pos_def";
+  case 3:
+    return "full_accurate";
+  default:
+    return "not_applicable";
+  }
+}
+
 string BuildFitStatisticLine(const Levy3DFitResult &fitResult) {
   std::stringstream statLine;
   statLine << std::fixed << std::setprecision(2)
@@ -1275,7 +1411,11 @@ TPaveText *BuildFitParameterBox(const Levy3DFitResult &fitResult, double x1,
   box->SetBorderSize(1);
   box->SetTextAlign(12);
   box->SetTextFont(42);
-  box->SetTextSize(fitResult.hasOffDiagonal ? 0.024 : 0.028);
+  double textSize = fitResult.hasOffDiagonal ? 0.024 : 0.028;
+  if (fitResult.usesPML) {
+    textSize = fitResult.hasOffDiagonal ? 0.022 : 0.024;
+  }
+  box->SetTextSize(textSize);
 
   box->AddText(BuildFitModeTitle(fitResult).c_str());
   box->AddText(BuildFitSwitchLine(fitResult).c_str());
@@ -1322,6 +1462,17 @@ TPaveText *BuildFitParameterBox(const Levy3DFitResult &fitResult, double x1,
   box->AddText(
       (string("Fit method: ") + (fitResult.usesPML ? "PML" : "chi2")).c_str());
   box->AddText(BuildFitStatisticLine(fitResult).c_str());
+  if (fitResult.usesPML) {
+    std::stringstream edmLine;
+    edmLine << std::scientific << std::setprecision(3)
+            << "EDM = " << fitResult.edm;
+    box->AddText(edmLine.str().c_str());
+    box->AddText((string("istat = ") + std::to_string(fitResult.minuitIstat))
+                     .c_str());
+    box->AddText((string("Cov quality: ") +
+                  DescribeCovarianceQuality(fitResult.minuitIstat))
+                     .c_str());
+  }
 
   return box;
 }
@@ -1347,8 +1498,10 @@ TCanvas *BuildProjectionCanvas(const string &canvasName, TH1D *hData,
   legend->AddEntry(gFit, "Levy fit projection", "l");
   legend->Draw();
 
-  auto parameterBox = BuildFitParameterBox(
-      fitResult, 0.16, fitResult.hasOffDiagonal ? 0.40 : 0.50, 0.58, 0.88);
+  const double y1 =
+      fitResult.hasOffDiagonal ? (fitResult.usesPML ? 0.32 : 0.40)
+                               : (fitResult.usesPML ? 0.42 : 0.50);
+  auto parameterBox = BuildFitParameterBox(fitResult, 0.16, y1, 0.58, 0.88);
   parameterBox->Draw();
 
   canvas->Update();
@@ -1374,8 +1527,10 @@ TCanvas *Build3DComparisonCanvas(const string &canvasName, TH3D *hData,
   fitFunc->SetLineColor(kRed + 1);
   fitFunc->SetLineWidth(2);
   fitFunc->Draw("ISO");
-  auto parameterBox = BuildFitParameterBox(
-      fitResult, 0.12, fitResult.hasOffDiagonal ? 0.28 : 0.40, 0.58, 0.88);
+  const double y1 =
+      fitResult.hasOffDiagonal ? (fitResult.usesPML ? 0.18 : 0.28)
+                               : (fitResult.usesPML ? 0.30 : 0.40);
+  auto parameterBox = BuildFitParameterBox(fitResult, 0.12, y1, 0.58, 0.88);
   parameterBox->Draw();
   canvas->Update();
   return canvas;
@@ -1432,6 +1587,7 @@ struct Levy3DPMLContext {
   TH3D *hMERaw = nullptr;
   bool useFullModel = false;
   Levy3DFitOptions fitOptions;
+  double rawSameToMixedIntegralRatio = 1.0;
 };
 
 static Levy3DPMLContext gLevy3DPMLContext;
@@ -1444,13 +1600,69 @@ double EvaluateLevyModelFromParameterArray(double qOut, double qSide,
                       : Levy3DModel(x, const_cast<double *>(par));
 }
 
+// The production CF stored by CFCalc3D is
+//   C_norm(q) = [SE(q) / I_SE] / [ME(q) / I_ME],
+// where I_SE and I_ME are visible-bin Integral("width") values of the slice.
+//
+// For a Poisson-likelihood fit performed directly on raw same/mixed counts, the
+// model entering the likelihood must therefore be
+//   R_raw(q) = SE(q) / ME(q) = C_norm(q) * (I_SE / I_ME).
+double ComputeRawToNormalizedCFScale(TH3D *hSERaw, TH3D *hMERaw) {
+  if (!hSERaw || !hMERaw) {
+    return 0.0;
+  }
+
+  const double intSE = IntegralVisibleRange(hSERaw, true);
+  const double intME = IntegralVisibleRange(hMERaw, true);
+  if (intSE <= 0.0 || intME <= 0.0) {
+    return 0.0;
+  }
+  return intSE / intME;
+}
+
+double ComputePMLNeg2LogLContribution(double sameCounts, double mixedCounts,
+                                      double modelRatio) {
+  if (sameCounts < 0.0 || mixedCounts < 0.0 || modelRatio <= 0.0 ||
+      !std::isfinite(modelRatio)) {
+    return kFitPenaltyValue;
+  }
+  if (sameCounts == 0.0 && mixedCounts == 0.0) {
+    return 0.0;
+  }
+  if (sameCounts == 0.0) {
+    return 2.0 * mixedCounts * std::log1p(modelRatio);
+  }
+  if (mixedCounts == 0.0) {
+    const double logTerm =
+        modelRatio >= 1.0 ? std::log1p(1.0 / modelRatio)
+                          : std::log1p(modelRatio) - std::log(modelRatio);
+    return 2.0 * sameCounts * logTerm;
+  }
+
+  const double totalCounts = sameCounts + mixedCounts;
+  const double arg1 =
+      modelRatio * totalCounts / (sameCounts * (modelRatio + 1.0));
+  const double arg2 = totalCounts / (mixedCounts * (modelRatio + 1.0));
+  if (arg1 <= 0.0 || arg2 <= 0.0 || !std::isfinite(arg1) ||
+      !std::isfinite(arg2)) {
+    return kFitPenaltyValue;
+  }
+
+  return -2.0 * (sameCounts * std::log(arg1) + mixedCounts * std::log(arg2));
+}
+
 void Levy3DPMLFCN(Int_t &npar, Double_t *grad, Double_t &f, Double_t *par,
                   Int_t flag) {
   (void)npar;
   (void)grad;
   (void)flag;
   if (!gLevy3DPMLContext.hSERaw || !gLevy3DPMLContext.hMERaw) {
-    f = 1e30;
+    f = kFitPenaltyValue;
+    return;
+  }
+  if (gLevy3DPMLContext.useFullModel &&
+      !HasValidFullR2MatrixFromParameterArray(par)) {
+    f = kFitPenaltyValue;
     return;
   }
 
@@ -1481,34 +1693,37 @@ void Levy3DPMLFCN(Int_t &npar, Double_t *grad, Double_t &f, Double_t *par,
             gLevy3DPMLContext.hSERaw->GetBinContent(ix, iy, iz);
         const double mixedCounts =
             gLevy3DPMLContext.hMERaw->GetBinContent(ix, iy, iz);
-        if (sameCounts <= 0.0 || mixedCounts <= 0.0) {
+        if (sameCounts < 0.0 || mixedCounts < 0.0) {
+          f = kFitPenaltyValue;
+          return;
+        }
+        if (sameCounts == 0.0 && mixedCounts == 0.0) {
           continue;
         }
 
         double modelRatio = EvaluateLevyModelFromParameterArray(
             qOut, qSide, qLong, par, gLevy3DPMLContext.useFullModel);
+        modelRatio *= gLevy3DPMLContext.rawSameToMixedIntegralRatio;
         if (modelRatio <= 0.0 || !std::isfinite(modelRatio)) {
-          f = 1e30;
+          f = kFitPenaltyValue;
           return;
         }
 
-        const double totalCounts = sameCounts + mixedCounts;
-        const double arg1 =
-            modelRatio * totalCounts / (sameCounts * (modelRatio + 1.0));
-        const double arg2 = totalCounts / (mixedCounts * (modelRatio + 1.0));
-        if (arg1 <= 0.0 || arg2 <= 0.0 || !std::isfinite(arg1) ||
-            !std::isfinite(arg2)) {
-          f = 1e30;
+        const double neg2LogLContribution =
+            ComputePMLNeg2LogLContribution(sameCounts, mixedCounts, modelRatio);
+        if (!std::isfinite(neg2LogLContribution) ||
+            neg2LogLContribution < 0.0 ||
+            neg2LogLContribution >= kFitPenaltyValue) {
+          f = kFitPenaltyValue;
           return;
         }
 
-        neg2LogL +=
-            -2.0 * (sameCounts * std::log(arg1) + mixedCounts * std::log(arg2));
+        neg2LogL += neg2LogLContribution;
       }
     }
   }
 
-  f = std::isfinite(neg2LogL) ? neg2LogL : 1e30;
+  f = std::isfinite(neg2LogL) ? neg2LogL : kFitPenaltyValue;
 }
 
 int CountPMLUsableBins(TH3D *hSERaw, TH3D *hMERaw, double qMax) {
@@ -1531,8 +1746,9 @@ int CountPMLUsableBins(TH3D *hSERaw, TH3D *hMERaw, double qMax) {
         if (std::abs(qLong) > qMax) {
           continue;
         }
-        if (hSERaw->GetBinContent(ix, iy, iz) > 0.0 &&
-            hMERaw->GetBinContent(ix, iy, iz) > 0.0) {
+        if (hSERaw->GetBinContent(ix, iy, iz) +
+                hMERaw->GetBinContent(ix, iy, iz) >
+            0.0) {
           ++nPoints;
         }
       }
@@ -1598,8 +1814,14 @@ void ConfigurePMLMinuit(TMinuit &minuit, TF3 *fitFunc, bool useFullModel,
 
 bool RunPMLFit(TF3 *fitFunc, TH3D *hSERaw, TH3D *hMERaw, bool useFullModel,
                const Levy3DFitOptions &fitOptions, double &fitStatistic,
-               int &ndf, int &fitStatus) {
+               int &ndf, int &fitStatus, double &edm, int &minuitIstat) {
   if (!fitFunc || !hSERaw || !hMERaw) {
+    return false;
+  }
+
+  const double rawToNormalizedScale =
+      ComputeRawToNormalizedCFScale(hSERaw, hMERaw);
+  if (rawToNormalizedScale <= 0.0 || !std::isfinite(rawToNormalizedScale)) {
     return false;
   }
 
@@ -1607,6 +1829,7 @@ bool RunPMLFit(TF3 *fitFunc, TH3D *hSERaw, TH3D *hMERaw, bool useFullModel,
   gLevy3DPMLContext.hMERaw = hMERaw;
   gLevy3DPMLContext.useFullModel = useFullModel;
   gLevy3DPMLContext.fitOptions = fitOptions;
+  gLevy3DPMLContext.rawSameToMixedIntegralRatio = rawToNormalizedScale;
 
   const int nPar = fitFunc->GetNpar();
   TMinuit minuit(nPar);
@@ -1632,7 +1855,6 @@ bool RunPMLFit(TF3 *fitFunc, TH3D *hSERaw, TH3D *hMERaw, bool useFullModel,
   Int_t nparx = 0;
   Int_t istat = 0;
   minuit.mnstat(fmin, fedm, errdef, npari, nparx, istat);
-  (void)fedm;
   (void)errdef;
   (void)nparx;
 
@@ -1645,8 +1867,10 @@ bool RunPMLFit(TF3 *fitFunc, TH3D *hSERaw, TH3D *hMERaw, bool useFullModel,
   }
 
   fitStatistic = fmin;
+  edm = fedm;
   ndf = std::max(0, CountPMLUsableBins(hSERaw, hMERaw, fitOptions.fitQMax) -
                         npari);
+  minuitIstat = istat;
   fitStatus = migradIerr != 0 ? -migradIerr : istat;
   return true;
 }
@@ -1655,9 +1879,11 @@ bool FitAndWriteSingleCFHistogram(TH3D *hCF, TH3D *hSERaw, TH3D *hMERaw,
                                   Levy3DFitResult &fitResult,
                                   const string &wpath, const string &wfilename,
                                   bool useFullModel,
-                                  const Levy3DFitOptions &fitOptions) {
+                                  const Levy3DFitOptions &fitOptions,
+                                  TFile *sharedOutputFile = nullptr) {
   auto fillResultFromFunction = [&](TF3 *fitFunc, double fitStatistic,
-                                    int fitNdf, int fitStatus) {
+                                    int fitNdf, int fitStatus, double fitEdm,
+                                    int fitMinuitIstat) {
     fitResult.fitModel = useFullModel ? "full" : "diag";
     fitResult.hasOffDiagonal = useFullModel;
     fitResult.usesCoulomb = fitOptions.useCoulomb;
@@ -1698,8 +1924,10 @@ bool FitAndWriteSingleCFHistogram(TH3D *hCF, TH3D *hSERaw, TH3D *hMERaw,
           fitOptions.useQ2Baseline ? fitFunc->GetParError(6) : 0.0;
     }
     fitResult.chi2 = fitStatistic;
+    fitResult.edm = fitOptions.usePML ? fitEdm : -1.0;
     fitResult.ndf = fitNdf;
     fitResult.status = fitStatus;
+    fitResult.minuitIstat = fitOptions.usePML ? fitMinuitIstat : -1;
   };
 
   const string objectName = fitResult.histName;
@@ -1710,12 +1938,15 @@ bool FitAndWriteSingleCFHistogram(TH3D *hCF, TH3D *hSERaw, TH3D *hMERaw,
                                      fitOptions)
           : BuildLevyFitFunction(objectName + "_levy3d_fit", fitOptions);
   double fitStatistic = 0.0;
+  double fitEdm = -1.0;
   int fitNdf = 0;
   int fitStatus = -1;
+  int fitMinuitIstat = -1;
   bool fitSucceeded = false;
   if (fitOptions.usePML) {
     fitSucceeded = RunPMLFit(fitFunc, hSERaw, hMERaw, useFullModel, fitOptions,
-                             fitStatistic, fitNdf, fitStatus);
+                             fitStatistic, fitNdf, fitStatus, fitEdm,
+                             fitMinuitIstat);
   } else {
     auto fitStatusObject = hCF->Fit(fitFunc, "RSMNQ0");
     fitStatistic = fitFunc->GetChisquare();
@@ -1723,11 +1954,15 @@ bool FitAndWriteSingleCFHistogram(TH3D *hCF, TH3D *hSERaw, TH3D *hMERaw,
     fitStatus = static_cast<int>(fitStatusObject);
     fitSucceeded = true;
   }
-  fillResultFromFunction(fitFunc, fitStatistic, fitNdf, fitStatus);
+  fillResultFromFunction(fitFunc, fitStatistic, fitNdf, fitStatus, fitEdm,
+                         fitMinuitIstat);
   if (!fitSucceeded) {
     delete fitFunc;
     return false;
   }
+
+  const bool oldBatchMode = gROOT->IsBatch();
+  gROOT->SetBatch(kTRUE);
 
   const string fitHistName =
       objectName + (useFullModel ? "_full_fit3d" : "_fit3d");
@@ -1767,11 +2002,14 @@ bool FitAndWriteSingleCFHistogram(TH3D *hCF, TH3D *hSERaw, TH3D *hMERaw,
       objectName + (useFullModel ? "_canvas_full_3D" : "_canvas_3D"), hCF,
       fitFunc, fitResult);
 
-  auto wf = GetROOT(wpath, wfilename, "update");
+  TFile *wf = sharedOutputFile;
+  const bool ownsOutputFile = (wf == nullptr);
+  if (ownsOutputFile) {
+    wf = OpenOutputROOTFileForUpdate(wpath, wfilename,
+                                     "write output ROOT file");
+  }
   if (!wf || wf->IsZombie()) {
-    cout << "ERROR: cannot write output ROOT file " << wpath << "/" << wfilename
-         << ".root" << endl;
-    delete wf;
+    gROOT->SetBatch(oldBatchMode);
     delete cProjX;
     delete cProjY;
     delete cProjZ;
@@ -1786,9 +2024,26 @@ bool FitAndWriteSingleCFHistogram(TH3D *hCF, TH3D *hSERaw, TH3D *hMERaw,
     return false;
   }
 
-  auto dir = wf->GetDirectory(objectName.c_str());
+  auto dir = GetOrCreateOutputDirectory(wf, objectName);
   if (!dir) {
-    dir = wf->mkdir(objectName.c_str());
+    cout << "ERROR: cannot create output directory " << objectName << endl;
+    if (ownsOutputFile) {
+      wf->Close();
+      delete wf;
+    }
+    gROOT->SetBatch(oldBatchMode);
+    delete cProjX;
+    delete cProjY;
+    delete cProjZ;
+    delete c3D;
+    delete hProjXData;
+    delete hProjYData;
+    delete hProjZData;
+    delete hProjXFit;
+    delete hProjYFit;
+    delete hProjZFit;
+    delete fitFunc;
+    return false;
   }
   dir->cd();
 
@@ -1805,8 +2060,12 @@ bool FitAndWriteSingleCFHistogram(TH3D *hCF, TH3D *hSERaw, TH3D *hMERaw,
   cProjZ->Write();
   c3D->Write();
 
-  wf->Close();
-  delete wf;
+  if (ownsOutputFile) {
+    wf->Close();
+    delete wf;
+  } else {
+    wf->cd();
+  }
   delete cProjX;
   delete cProjY;
   delete cProjZ;
@@ -1818,6 +2077,7 @@ bool FitAndWriteSingleCFHistogram(TH3D *hCF, TH3D *hSERaw, TH3D *hMERaw,
   delete hProjYFit;
   delete hProjZFit;
   delete fitFunc;
+  gROOT->SetBatch(oldBatchMode);
   return true;
 }
 
@@ -1857,7 +2117,8 @@ void FitCF3DWithSelectedBins(
     const string &wfilename, const string &txtFilename,
     std::vector<std::pair<double, double>> centBins,
     std::vector<std::pair<double, double>> mTBins, bool useFullModel,
-    const Levy3DFitOptions &fitOptions = Levy3DFitOptions()) {
+    const Levy3DFitOptions &fitOptions = Levy3DFitOptions(),
+    bool reopenOutputFilePerSlice = true) {
   const bool oldAddDirectory = TH1::AddDirectoryStatus();
   TH1::AddDirectory(kFALSE);
 
@@ -1875,6 +2136,19 @@ void FitCF3DWithSelectedBins(
     delete rf;
     TH1::AddDirectory(oldAddDirectory);
     return;
+  }
+
+  TFile *sharedOutputFile = nullptr;
+  if (!reopenOutputFilePerSlice) {
+    sharedOutputFile =
+        OpenOutputROOTFileForUpdate(wpath, wfilename,
+                                    "reuse output ROOT file during fitting");
+    if (!sharedOutputFile) {
+      rf->Close();
+      delete rf;
+      TH1::AddDirectory(oldAddDirectory);
+      return;
+    }
   }
 
   vector<Levy3DFitResult> fitResults;
@@ -1925,7 +2199,8 @@ void FitCF3DWithSelectedBins(
     }
 
     if (FitAndWriteSingleCFHistogram(hCF, hSERaw, hMERaw, fitResult, wpath,
-                                     wfilename, useFullModel, fitOptions)) {
+                                     wfilename, useFullModel, fitOptions,
+                                     sharedOutputFile)) {
       fitResults.push_back(fitResult);
     }
 
@@ -1934,15 +2209,27 @@ void FitCF3DWithSelectedBins(
     delete hCF;
   }
 
-  auto wf = GetROOT(wpath, wfilename, "update");
+  TFile *wf = sharedOutputFile;
+  const bool ownsSummaryFile = (wf == nullptr);
+  if (ownsSummaryFile) {
+    wf = OpenOutputROOTFileForUpdate(wpath, wfilename,
+                                     "update output ROOT file for summary graphs");
+  }
   if (!wf || wf->IsZombie()) {
     cout << "ERROR: cannot update output ROOT file " << wpath << "/"
          << wfilename << ".root for summary graphs" << endl;
-    delete wf;
   } else {
     WriteR2Graphs(wf, fitResults);
-    wf->Close();
-    delete wf;
+    if (ownsSummaryFile) {
+      wf->Close();
+      delete wf;
+    } else {
+      wf->cd();
+    }
+  }
+  if (sharedOutputFile) {
+    sharedOutputFile->Close();
+    delete sharedOutputFile;
   }
 
   WriteFitResultsSummary(wpath + "/" + txtFilename + ".txt", fitResults);
@@ -1967,7 +2254,7 @@ void WriteFitResultsSummary(const string &txtPath,
          "Routside2Err "
          "Routlong2 Routlong2Err Rsidelong2 Rsidelong2Err alpha alphaErr "
          "baselineQ2 baselineQ2Err "
-         "chi2 ndf status\n";
+         "chi2 edm ndf status minuitIstat covarianceQuality\n";
   out << std::fixed << std::setprecision(6);
 
   for (const auto &result : results) {
@@ -1985,7 +2272,9 @@ void WriteFitResultsSummary(const string &txtPath,
         << result.routlong2Err << " " << result.rsidelong2 << " "
         << result.rsidelong2Err << " " << result.alpha << " " << result.alphaErr
         << " " << result.baselineQ2 << " " << result.baselineQ2Err << " "
-        << result.chi2 << " " << result.ndf << " " << result.status << "\n";
+        << result.chi2 << " " << result.edm << " " << result.ndf << " "
+        << result.status << " " << result.minuitIstat << " "
+        << CovarianceQualityToken(result.minuitIstat) << "\n";
   }
 }
 
@@ -2297,7 +2586,8 @@ void WriteR2Graphs(TFile *wf, const vector<Levy3DFitResult> &results) {
 void FitCF3DWithLevy(const string &rpath, const string &rfilename,
                      const string &wpath, const string &wfilename,
                      const string &txtFilename,
-                     const Levy3DFitOptions &fitOptions = Levy3DFitOptions()) {
+                     const Levy3DFitOptions &fitOptions = Levy3DFitOptions(),
+                     bool reopenOutputFilePerSlice = true) {
   const bool oldAddDirectory = TH1::AddDirectoryStatus();
   TH1::AddDirectory(kFALSE);
 
@@ -2317,6 +2607,19 @@ void FitCF3DWithLevy(const string &rpath, const string &rfilename,
     delete rf;
     TH1::AddDirectory(oldAddDirectory);
     return;
+  }
+
+  TFile *sharedOutputFile = nullptr;
+  if (!reopenOutputFilePerSlice) {
+    sharedOutputFile =
+        OpenOutputROOTFileForUpdate(wpath, wfilename,
+                                    "reuse output ROOT file during fitting");
+    if (!sharedOutputFile) {
+      rf->Close();
+      delete rf;
+      TH1::AddDirectory(oldAddDirectory);
+      return;
+    }
   }
 
   vector<Levy3DFitResult> fitResults;
@@ -2360,7 +2663,8 @@ void FitCF3DWithLevy(const string &rpath, const string &rfilename,
 
     cout << "Fitting " << objectName << endl;
     if (FitAndWriteSingleCFHistogram(hCF, hSERaw, hMERaw, fitResult, wpath,
-                                     wfilename, false, fitOptions)) {
+                                     wfilename, false, fitOptions,
+                                     sharedOutputFile)) {
       fitResults.push_back(fitResult);
     }
     delete hSERaw;
@@ -2368,15 +2672,27 @@ void FitCF3DWithLevy(const string &rpath, const string &rfilename,
     delete hCF;
   }
 
-  auto wf = GetROOT(wpath, wfilename, "update");
+  TFile *wf = sharedOutputFile;
+  const bool ownsSummaryFile = (wf == nullptr);
+  if (ownsSummaryFile) {
+    wf = OpenOutputROOTFileForUpdate(wpath, wfilename,
+                                     "update output ROOT file for summary graphs");
+  }
   if (!wf || wf->IsZombie()) {
     cout << "ERROR: cannot update output ROOT file " << wpath << "/"
          << wfilename << ".root for summary graphs" << endl;
-    delete wf;
   } else {
     WriteR2Graphs(wf, fitResults);
-    wf->Close();
-    delete wf;
+    if (ownsSummaryFile) {
+      wf->Close();
+      delete wf;
+    } else {
+      wf->cd();
+    }
+  }
+  if (sharedOutputFile) {
+    sharedOutputFile->Close();
+    delete sharedOutputFile;
   }
   WriteFitResultsSummary(wpath + "/" + txtFilename + ".txt", fitResults);
 
@@ -2391,7 +2707,8 @@ void FitCF3DWithLevy(const string &rpath, const string &rfilename,
 void FitCF3DWithFullLevy(
     const string &rpath, const string &rfilename, const string &wpath,
     const string &wfilename, const string &txtFilename,
-    const Levy3DFitOptions &fitOptions = Levy3DFitOptions()) {
+    const Levy3DFitOptions &fitOptions = Levy3DFitOptions(),
+    bool reopenOutputFilePerSlice = true) {
   const bool oldAddDirectory = TH1::AddDirectoryStatus();
   TH1::AddDirectory(kFALSE);
 
@@ -2411,6 +2728,19 @@ void FitCF3DWithFullLevy(
     delete rf;
     TH1::AddDirectory(oldAddDirectory);
     return;
+  }
+
+  TFile *sharedOutputFile = nullptr;
+  if (!reopenOutputFilePerSlice) {
+    sharedOutputFile =
+        OpenOutputROOTFileForUpdate(wpath, wfilename,
+                                    "reuse output ROOT file during fitting");
+    if (!sharedOutputFile) {
+      rf->Close();
+      delete rf;
+      TH1::AddDirectory(oldAddDirectory);
+      return;
+    }
   }
 
   vector<Levy3DFitResult> fitResults;
@@ -2454,7 +2784,8 @@ void FitCF3DWithFullLevy(
 
     cout << "Fitting full Levy model for " << objectName << endl;
     if (FitAndWriteSingleCFHistogram(hCF, hSERaw, hMERaw, fitResult, wpath,
-                                     wfilename, true, fitOptions)) {
+                                     wfilename, true, fitOptions,
+                                     sharedOutputFile)) {
       fitResults.push_back(fitResult);
     }
     delete hSERaw;
@@ -2462,15 +2793,27 @@ void FitCF3DWithFullLevy(
     delete hCF;
   }
 
-  auto wf = GetROOT(wpath, wfilename, "update");
+  TFile *wf = sharedOutputFile;
+  const bool ownsSummaryFile = (wf == nullptr);
+  if (ownsSummaryFile) {
+    wf = OpenOutputROOTFileForUpdate(wpath, wfilename,
+                                     "update output ROOT file for summary graphs");
+  }
   if (!wf || wf->IsZombie()) {
     cout << "ERROR: cannot update output ROOT file " << wpath << "/"
          << wfilename << ".root for summary graphs" << endl;
-    delete wf;
   } else {
     WriteR2Graphs(wf, fitResults);
-    wf->Close();
-    delete wf;
+    if (ownsSummaryFile) {
+      wf->Close();
+      delete wf;
+    } else {
+      wf->cd();
+    }
+  }
+  if (sharedOutputFile) {
+    sharedOutputFile->Close();
+    delete sharedOutputFile;
   }
   WriteFitResultsSummary(wpath + "/" + txtFilename + ".txt", fitResults);
 
@@ -2587,15 +2930,16 @@ void _3d_cf_from_exp() {
   //--------------------------------------------------------------------------
   // Stage switches
   //--------------------------------------------------------------------------
-  bool doBuildCF3D = true;
+  bool doBuildCF3D = false;
   bool doFitDiag = false;
   bool doFitFull = true;
   bool mapPairPhiToSymmetricRange = false;
   bool writeNormalizedSEME1DProjections = false;
+  bool reopenOutputFilePerSlice = true;
   bool fitUseCoulomb = true;
   bool fitUseCoreHaloLambda = true;
   bool fitUseQ2Baseline = true;
-  bool fitUsePML = false;
+  bool fitUsePML = true;
 
   //--------------------------------------------------------------------------
   // Fit binning (can be a subset of the CF production binning)
@@ -2638,18 +2982,18 @@ void _3d_cf_from_exp() {
   if (doBuildCF3D) {
     CFCalc3D(rpath, rfilename, rtaskname, rsubtask_se, rsubtask_me, wpath,
              wfilename, centBins, mTBins, mapPairPhiToSymmetricRange,
-             writeNormalizedSEME1DProjections);
+             writeNormalizedSEME1DProjections, reopenOutputFilePerSlice);
   }
 
   if (doFitDiag) {
     FitCF3DWithSelectedBins(fitInputPath, fitInputFilename, wpath,
                             fitDiagOutput, fitDiagTxt, fitCentBins, fitMTBins,
-                            false, fitOptions);
+                            false, fitOptions, reopenOutputFilePerSlice);
   }
 
   if (doFitFull) {
     FitCF3DWithSelectedBins(fitInputPath, fitInputFilename, wpath,
                             fitFullOutput, fitFullTxt, fitCentBins, fitMTBins,
-                            true, fitOptions);
+                            true, fitOptions, reopenOutputFilePerSlice);
   }
 }
