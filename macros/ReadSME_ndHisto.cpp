@@ -241,9 +241,11 @@ void ndHistoRead(string rpath, string rfilename, string wpath, string wfilename,
 
 void ReadSME_ndHisto() {
   // string rpath = "/Users/allenzhou/ALICE/scripts/femtoep";
-  string rpath = "/Users/allenzhou/ALICE/alidata/femtoep_res";
+  // string rpath = "/Users/allenzhou/ALICE/alidata/femtoep_res";
+  string rpath = "/Users/allenzhou/ALICE/alidata/hyperloopres/femtoep";
   // string rfilename = "AnalysisResults_femtoep_sm";
-  string rfilename = "AnalysisResults_femtoep_rec";
+  // string rfilename = "AnalysisResults_femtoep_rec";
+  string rfilename = "AnalysisResults";
   string wpath = "/Users/allenzhou/ALICE/alidata/femtoep_res";
   // string wpath = "/Users/allenzhou/ALICE/scripts/femtoep";
   string wfilename1 = "Femtoep_Same";

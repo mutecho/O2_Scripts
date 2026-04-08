@@ -1,0 +1,29 @@
+<?xml version="1.0" ?>
+<alien>
+	<collection>
+		<event name="1">
+			<file aclId="" broken="0" ctime="1746137796000" dir="27331456" entryId="27331457" expiretime="" gowner="alidaq" guid="ee29d1e7-26d9-11f0-800d-3cecef03eb64" guidtime="11F026D9" jobid="3323954539" lfn="file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0145825184_tf0000306692_epn206/001/AO2D.root" md5="313201c5428305ec1a502088a82a0a44" name="AO2D.root" owner="alidaq" perm="755" replicated="0" size="4022535650" turl="file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0145825184_tf0000306692_epn206/001/AO2D.root" type="f"/>
+		</event>
+		<event name="2">
+			<file aclId="" broken="0" ctime="1746195153000" dir="27438261" entryId="27438262" expiretime="" gowner="alidaq" guid="7979fb3e-275f-11f0-800d-3cecef04a694" guidtime="11F0275F" jobid="3323954514" lfn="file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0143621120_tf0000237815_epn266/007/AO2D.root" md5="ad99bf64cf35905ed6edc8937cedafee" name="AO2D.root" owner="alidaq" perm="755" replicated="0" size="4022575657" turl="file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0143621120_tf0000237815_epn266/007/AO2D.root" type="f"/>
+		</event>
+		<event name="3">
+			<file aclId="" broken="0" ctime="1746138197000" dir="27331736" entryId="27331737" expiretime="" gowner="alidaq" guid="dce47627-26da-11f0-800d-3cecef04a892" guidtime="11F026DA" jobid="3323954536" lfn="file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0145772576_tf0000305048_epn008/003/AO2D.root" md5="de9ab97c96a536312efd4a39bdd6a9c3" name="AO2D.root" owner="alidaq" perm="755" replicated="0" size="4024916116" turl="file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0145772576_tf0000305048_epn008/003/AO2D.root" type="f"/>
+		</event>
+		<event name="4">
+			<file aclId="" broken="0" ctime="1746203766000" dir="27457927" entryId="27457928" expiretime="" gowner="alidaq" guid="8771c925-2773-11f0-800d-3cecef03ea38" guidtime="11F02773" jobid="3323954503" lfn="file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0142555072_tf0000204501_epn238/005/AO2D.root" md5="ee8b3d6606691a067f17ff35ddbe89bd" name="AO2D.root" owner="alidaq" perm="755" replicated="0" size="4020757958" turl="file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0142555072_tf0000204501_epn238/005/AO2D.root" type="f"/>
+		</event>
+		<event name="5">
+			<file aclId="" broken="0" ctime="1746231816000" dir="27504287" entryId="27504288" expiretime="" gowner="alidaq" guid="d6997fc8-27b4-11f0-800d-3cecef03ea02" guidtime="11F027B4" jobid="3323954512" lfn="file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0143592832_tf0000236931_epn333/006/AO2D.root" md5="e85ffd5b6eb4c8f7231268167b4c2df8" name="AO2D.root" owner="alidaq" perm="755" replicated="0" size="4020581159" turl="file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0143592832_tf0000236931_epn333/006/AO2D.root" type="f"/>
+		</event>
+		<event name="6">
+			<file aclId="" broken="0" ctime="1746133280000" dir="27330426" entryId="27330427" expiretime="" gowner="alidaq" guid="6a798f68-26cf-11f0-800d-3cecef6889e8" guidtime="11F026CF" jobid="3323954511" lfn="file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0143580000_tf0000236530_epn276/005/AO2D.root" md5="5b32d4ecbba585004505d7a3fdb8e8cd" name="AO2D.root" owner="alidaq" perm="755" replicated="0" size="4025656127" turl="file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0143580000_tf0000236530_epn276/005/AO2D.root" type="f"/>
+		</event>
+		<event name="7">
+			<file aclId="" broken="0" ctime="1746138023000" dir="27331620" entryId="27331621" expiretime="" gowner="alidaq" guid="75334289-26da-11f0-800e-3cecef04aa04" guidtime="11F026DA" jobid="3323954537" lfn="file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0145791872_tf0000305651_epn055/009/AO2D.root" md5="427b0246811c178ce365772e133aea91" name="AO2D.root" owner="alidaq" perm="755" replicated="0" size="4080561864" turl="file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0145791872_tf0000305651_epn055/009/AO2D.root" type="f"/>
+		</event>
+		<event name="8">
+			<file aclId="" broken="0" ctime="1746139112000" dir="27332344" entryId="27332345" expiretime="" gowner="alidaq" guid="fe38d6af-26dc-11f0-800d-3cecef03ed94" guidtime="11F026DC" jobid="3323954553" lfn="file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0146964128_tf0000342284_epn018/006/AO2D.root" md5="ed70bc8b60b351a9bd0ad01e4351206b" name="AO2D.root" owner="alidaq" perm="755" replicated="0" size="4022057512" turl="file:///home/alitrain/train-workdir/testdata/LFN/alice/data/2023/LHC23zzh/544122/apass5/0420/o2_ctf_run00544122_orbit0146964128_tf0000342284_epn018/006/AO2D.root" type="f"/>
+		</event>
+	</collection>
+</alien>
