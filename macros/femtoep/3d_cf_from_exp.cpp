@@ -2684,9 +2684,9 @@ void _3d_cf_from_exp() {
   // string data_set = "23zzh_pass5_small_t3";
   // string data_set = "23zzh_pass5_small_dbgt4";
   // string data_set = "23zzh_pass5_small_noepmix";
-  string data_set = "23zzh_pass5_medium";
+  // string data_set = "23zzh_pass5_medium";
 
-  // string data_set = "25ae_pass2";
+  string data_set = "25ae_pass2";
   // string data_set = "25ae_pass2_test";
   // string data_set = "25ae_pass2_noepmix";
   // string data_set = "25ae_pass2_noepmix_moremult";
@@ -2705,8 +2705,8 @@ void _3d_cf_from_exp() {
 
   // enum system = {"PbPb", "OO"}; forbidden
   //   string rpath = rpath_pbpb;
-  bool kisoo = 0;
-  bool kispbpb = 1;
+  bool kisoo = 1;
+  bool kispbpb = 2;
 
   if (kisoo && kispbpb) {
     cout << "ERROR: both kisoo and kispbpb cannot be true at the same time." << endl;
