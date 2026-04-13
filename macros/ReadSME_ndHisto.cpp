@@ -1,3 +1,10 @@
+#include <TAxis.h>
+#include <TCanvas.h>
+#include <TFile.h>
+#include <THnSparse.h>
+#include <TLegend.h>
+#include <TMath.h>
+
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -8,13 +15,6 @@
 #include "TF1.h"
 #include "TH1.h"
 #include "TTree.h"
-#include <TAxis.h>
-#include <TCanvas.h>
-#include <TFile.h>
-#include <THnSparse.h>
-#include <TLegend.h>
-#include <TMath.h>
-#include <iostream>
 
 using namespace std;
 
@@ -31,17 +31,15 @@ void FileExists_warn(const string &filename) {
   }
 }
 
-unique_ptr<TFile> GetROOT(const string Readpath, const string ReadFilename,
-                          const string Option) {
+unique_ptr<TFile> GetROOT(const string Readpath, const string ReadFilename, const string Option) {
   string lowerOption = Option;
-  transform(lowerOption.begin(), lowerOption.end(), lowerOption.begin(),
-            [](unsigned char c) { return tolower(c); }); // 全转小写
-  if (!(lowerOption == "read" || lowerOption == "write" ||
-        lowerOption == "recreate")) {
-    cout << "Invalid Option: " << Option
-         << ", should be one of: read, write, recreate" << endl;
+  transform(lowerOption.begin(), lowerOption.end(), lowerOption.begin(), [](unsigned char c) {
+    return tolower(c);
+  });  // 全转小写
+  if (!(lowerOption == "read" || lowerOption == "write" || lowerOption == "recreate")) {
+    cout << "Invalid Option: " << Option << ", should be one of: read, write, recreate" << endl;
   }
-  string rfilename = Readpath + "/" + ReadFilename + ".root"; // 加上root后缀
+  string rfilename = Readpath + "/" + ReadFilename + ".root";  // 加上root后缀
   FileExists_warn(rfilename);
 
   return make_unique<TFile>(rfilename.c_str(), Option.c_str());
@@ -53,8 +51,7 @@ std::string doubleToString(double x, int precision = 2) {
   return ss.str();
 }
 
-void onefromndHisto(string rpath, string rfilename, string wpath,
-                    string wfilename) {
+void onefromndHisto(string rpath, string rfilename, string wpath, string wfilename) {
   // string fullpath = filepath + "/" +filename;
   auto rfFemtoep = GetROOT(rpath, rfilename, "read");
   auto wfFemtoep = GetROOT(wpath, wfilename, "recreate");
@@ -79,8 +76,7 @@ void onefromndHisto(string rpath, string rfilename, string wpath,
   int binNorm[2];
   binNorm[0] = h1sc->FindBin(0.5);
   binNorm[1] = h1sc->FindBin(0.8);
-  double factorN = h1mc->Integral(binNorm[0], binNorm[1]) /
-                   h1sc->Integral(binNorm[0], binNorm[1]);
+  double factorN = h1mc->Integral(binNorm[0], binNorm[1]) / h1sc->Integral(binNorm[0], binNorm[1]);
   h1mc->Divide(constant, factorN);
   h1sc->Divide(h1mc);
   TH1D *h1sc_re = (TH1D *)h1sc->Clone();
@@ -90,12 +86,12 @@ void onefromndHisto(string rpath, string rfilename, string wpath,
   binRange[0] = h1sc->FindBin(0.);
   binRange[1] = h1sc->FindBin(0.25);
 
-  h1sc_re->Reset(); // 清空内容
+  h1sc_re->Reset();  // 清空内容
 
   for (int i = binRange[0]; i <= binRange[1]; i++) {
     double content = h1sc->GetBinContent(i);
     double error = h1sc->GetBinError(i);
-    int newBin = i - binRange[0] + 1; // 从1开始填
+    int newBin = i - binRange[0] + 1;  // 从1开始填
     h1sc_re->SetBinContent(newBin, content);
     h1sc_re->SetBinError(newBin, error);
   }
@@ -122,8 +118,7 @@ void onefromndHisto(string rpath, string rfilename, string wpath,
   rfFemtoep->Close();
 }
 
-void ndHistoRead(string rpath, string rfilename, string wpath, string wfilename,
-                 EventType eventType) {
+void ndHistoRead(string rpath, string rfilename, string wpath, string wfilename, EventType eventType) {
   // string fullpath = filepath + "/" +filename;
   auto rfFemtoep = GetROOT(rpath, rfilename, "read");
   auto wfFemtoep = GetROOT(wpath, wfilename, "recreate");
@@ -147,10 +142,8 @@ void ndHistoRead(string rpath, string rfilename, string wpath, string wfilename,
   auto ax_EP = h4->GetAxis(3);
 
   // 定义中心度和 mT 区间
-  std::vector<std::pair<double, double>> centBins = {
-      {0, 30}, {30, 70}, {70, 100}};
-  std::vector<std::pair<double, double>> mTBins = {
-      {0.5, 0.7}, {0.7, 1.0}, {1.0, 1.5}};
+  std::vector<std::pair<double, double>> centBins = {{0, 30}, {30, 70}, {70, 100}};
+  std::vector<std::pair<double, double>> mTBins = {{0.5, 0.7}, {0.7, 1.0}, {1.0, 1.5}};
 
   // 定义 EP 对称区间
   struct EPBin {
@@ -161,9 +154,8 @@ void ndHistoRead(string rpath, string rfilename, string wpath, string wfilename,
   std::vector<EPBin> epBins;
   if (eventType == kSameEvent) {
     std::cout << "Using Same Event EP bins." << std::endl;
-    epBins = {
-        {0, TMath::Pi() / 4, 3 * TMath::Pi() / 4, TMath::Pi(), "In_plane"},
-        {TMath::Pi() / 4, 3 * TMath::Pi() / 4, -1, -1, "Out_of_plane"}};
+    epBins = {{0, TMath::Pi() / 4, 3 * TMath::Pi() / 4, TMath::Pi(), "In_plane"},
+              {TMath::Pi() / 4, 3 * TMath::Pi() / 4, -1, -1, "Out_of_plane"}};
   } else {
     std::cout << "Using Mixed Event EP bins." << std::endl;
     epBins = {{0, TMath::Pi(), -1, -1, "Min bias EP"}};
@@ -176,12 +168,9 @@ void ndHistoRead(string rpath, string rfilename, string wpath, string wfilename,
   // 主循环：每个中心度和 mT 各一张图
   for (auto [centLow, centHigh] : centBins) {
     for (auto [mTLow, mTHigh] : mTBins) {
-
       // 创建新的画布
-      string cname = "cent=" + to_string(static_cast<int>(centLow)) + "-" +
-                     to_string(static_cast<int>(centHigh)) +
-                     " mT=" + doubleToString(mTLow, 1) + "-" +
-                     doubleToString(mTHigh, 1);
+      string cname = "cent=" + to_string(static_cast<int>(centLow)) + "-" + to_string(static_cast<int>(centHigh))
+                     + " mT=" + doubleToString(mTLow, 1) + "-" + doubleToString(mTHigh, 1);
       // TCanvas *c = new TCanvas(cname, cname, 800,600);
       //  c->SetMargin(0.13, 0.05, 0.12, 0.07); c->SetGrid();
 
@@ -201,7 +190,7 @@ void ndHistoRead(string rpath, string rfilename, string wpath, string wfilename,
         // 如果是双区间（in-plane），要合并两部分
         TH1D *h_kstar_total = nullptr;
 
-        if (ep.low2 > 0) { // 有镜像部分
+        if (ep.low2 > 0) {  // 有镜像部分
           ax_EP->SetRangeUser(ep.low1, ep.high1);
           auto h1 = (TH1D *)h4->Projection(0);
           ax_EP->SetRangeUser(ep.low2, ep.high2);

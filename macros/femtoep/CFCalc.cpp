@@ -1,3 +1,10 @@
+#include <TAxis.h>
+#include <TCanvas.h>
+#include <TFile.h>
+#include <THnSparse.h>
+#include <TLegend.h>
+#include <TMath.h>
+
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -9,12 +16,6 @@
 #include "TF1.h"
 #include "TH1.h"
 #include "TTree.h"
-#include <TAxis.h>
-#include <TCanvas.h>
-#include <TFile.h>
-#include <THnSparse.h>
-#include <TLegend.h>
-#include <TMath.h>
 
 using namespace std;
 
@@ -32,17 +33,15 @@ void FileExists_warn(const string &filename) {
   }
 }
 
-unique_ptr<TFile> GetROOT(const string Readpath, const string ReadFilename,
-                          const string Option) {
+unique_ptr<TFile> GetROOT(const string Readpath, const string ReadFilename, const string Option) {
   string lowerOption = Option;
-  transform(lowerOption.begin(), lowerOption.end(), lowerOption.begin(),
-            [](unsigned char c) { return tolower(c); }); // 全转小写
-  if (!(lowerOption == "read" || lowerOption == "write" ||
-        lowerOption == "recreate")) {
-    cout << "Invalid Option: " << Option
-         << ", should be one of: read, write, recreate" << endl;
+  transform(lowerOption.begin(), lowerOption.end(), lowerOption.begin(), [](unsigned char c) {
+    return tolower(c);
+  });  // 全转小写
+  if (!(lowerOption == "read" || lowerOption == "write" || lowerOption == "recreate")) {
+    cout << "Invalid Option: " << Option << ", should be one of: read, write, recreate" << endl;
   }
-  string rfilename = Readpath + "/" + ReadFilename + ".root"; // 加上root后缀
+  string rfilename = Readpath + "/" + ReadFilename + ".root";  // 加上root后缀
   FileExists_warn(rfilename);
   cout << "Opening file: " << rfilename << " with option: " << Option << endl;
   return make_unique<TFile>(rfilename.c_str(), Option.c_str());
@@ -54,11 +53,9 @@ std::string doubleToString(double x, int precision = 2) {
   return ss.str();
 }
 
-TH1D *GetCFfromSM(TH1D *h_se, TH1D *h_me, double normLow, double normHigh,
-                  double kstarMax) {
+TH1D *GetCFfromSM(TH1D *h_se, TH1D *h_me, double normLow, double normHigh, double kstarMax) {
   TF1 *constant = new TF1("constant", "1", 0, 10);
-  cout << "Normalizing SE and ME histograms between k* = " << normLow << " and "
-       << normHigh << " GeV/c." << endl;
+  cout << "Normalizing SE and ME histograms between k* = " << normLow << " and " << normHigh << " GeV/c." << endl;
   TH1D *h_se_c = (TH1D *)h_se->Clone();
   TH1D *h_me_c = (TH1D *)h_me->Clone();
   cout << "Cloned SE and ME histograms." << endl;
@@ -66,8 +63,7 @@ TH1D *GetCFfromSM(TH1D *h_se, TH1D *h_me, double normLow, double normHigh,
   int binNorm[2];
   binNorm[0] = h_se_c->FindBin(normLow);
   binNorm[1] = h_se_c->FindBin(normHigh);
-  double factorN = h_me_c->Integral(binNorm[0], binNorm[1]) /
-                   h_se_c->Integral(binNorm[0], binNorm[1]);
+  double factorN = h_me_c->Integral(binNorm[0], binNorm[1]) / h_se_c->Integral(binNorm[0], binNorm[1]);
   h_me_c->Divide(constant, factorN);
   h_se_c->Divide(h_me_c);
   TH1D *h_cf_re = new TH1D();
@@ -82,8 +78,7 @@ TH1D *GetCFfromSM(TH1D *h_se, TH1D *h_me, double normLow, double normHigh,
   return h_cf_re;
 }
 
-void onefromndHisto(string rpath, string rfilename, string wpath,
-                    string wfilename) {
+void onefromndHisto(string rpath, string rfilename, string wpath, string wfilename) {
   // string fullpath = filepath + "/" +filename;
   auto rfFemtoep = GetROOT(rpath, rfilename, "read");
   auto wfFemtoep = GetROOT(wpath, wfilename, "recreate");
@@ -150,9 +145,12 @@ void onefromndHisto(string rpath, string rfilename, string wpath,
   rfFemtoep->Close();
 }
 
-void CFCalcWith_Cent_Mt_pairphi(string rpath_se, string rfilename_se,
-                                string rpath_me, string rfilename_me,
-                                string wpath, string wfilename,
+void CFCalcWith_Cent_Mt_pairphi(string rpath_se,
+                                string rfilename_se,
+                                string rpath_me,
+                                string rfilename_me,
+                                string wpath,
+                                string wfilename,
                                 std::vector<std::pair<double, double>> centBins,
                                 std::vector<std::pair<double, double>> mTBins,
                                 std::vector<std::string> pairphiBins) {
@@ -174,10 +172,8 @@ void CFCalcWith_Cent_Mt_pairphi(string rpath_se, string rfilename_se,
 
   for (auto [centLow, centHigh] : centBins) {
     for (auto [mTLow, mTHigh] : mTBins) {
-      string hname = "cent=" + to_string(static_cast<int>(centLow)) + "-" +
-                     to_string(static_cast<int>(centHigh)) +
-                     " mT=" + doubleToString(mTLow, 1) + "-" +
-                     doubleToString(mTHigh, 1);
+      string hname = "cent=" + to_string(static_cast<int>(centLow)) + "-" + to_string(static_cast<int>(centHigh))
+                     + " mT=" + doubleToString(mTLow, 1) + "-" + doubleToString(mTHigh, 1);
       string hname_me = hname + " " + "Min bias EP";
       TH1D *h1_me = rf_me->Get<TH1D>(hname_me.c_str());
       if (!h1_me) {
@@ -198,8 +194,7 @@ void CFCalcWith_Cent_Mt_pairphi(string rpath_se, string rfilename_se,
 
         binNorm[0] = h1sc->FindBin(0.5);
         binNorm[1] = h1sc->FindBin(0.8);
-        factorN = h1mc->Integral(binNorm[0], binNorm[1]) /
-                  h1sc->Integral(binNorm[0], binNorm[1]);
+        factorN = h1mc->Integral(binNorm[0], binNorm[1]) / h1sc->Integral(binNorm[0], binNorm[1]);
         h1mc->Divide(constant, factorN);
         h1sc->Divide(h1mc);
 
@@ -213,9 +208,8 @@ void CFCalcWith_Cent_Mt_pairphi(string rpath_se, string rfilename_se,
         for (int i = binRange[0]; i <= binRange[1]; i++) {
           double content = h1sc->GetBinContent(i);
           double error = h1sc->GetBinError(i);
-          int newBin = i - binRange[0] + 1; // 从1开始填
-          cout << "Bin " << newBin << " content: " << content
-               << ", error: " << error << endl;
+          int newBin = i - binRange[0] + 1;  // 从1开始填
+          cout << "Bin " << newBin << " content: " << content << ", error: " << error << endl;
           h1cf_re->SetBinContent(newBin, content);
           h1cf_re->SetBinError(newBin, error);
         }
@@ -240,14 +234,11 @@ void CFCalc() {
   string wfilename1 = "Check EP Femto";
   // string wfilename2 = "Check EP mixing 2";
 
-  std::vector<std::pair<double, double>> centBins = {
-      {0, 30}, {30, 70}, {70, 100}};
-  std::vector<std::pair<double, double>> mTBins = {
-      {0.5, 0.7}, {0.7, 1.0}, {1.0, 1.5}};
+  std::vector<std::pair<double, double>> centBins = {{0, 30}, {30, 70}, {70, 100}};
+  std::vector<std::pair<double, double>> mTBins = {{0.5, 0.7}, {0.7, 1.0}, {1.0, 1.5}};
   std::vector<std::string> pairphiBins = {"In_plane", "Out_of_plane"};
 
-  CFCalcWith_Cent_Mt_pairphi(rpath1, rfilename1, rpath1, rfilename2, wpath,
-                             wfilename1, centBins, mTBins, pairphiBins);
+  CFCalcWith_Cent_Mt_pairphi(rpath1, rfilename1, rpath1, rfilename2, wpath, wfilename1, centBins, mTBins, pairphiBins);
   // ndHistoRead(path, filename);
   // onefromndHisto(rpath1, rfilename1, wpath, wfilename1);
   // onefromndHisto(rpath2, rfilename2, wpath, wfilename2);

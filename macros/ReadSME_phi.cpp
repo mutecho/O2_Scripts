@@ -1,3 +1,10 @@
+#include <TAxis.h>
+#include <TCanvas.h>
+#include <TFile.h>
+#include <THnSparse.h>
+#include <TLegend.h>
+#include <TMath.h>
+
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -6,13 +13,6 @@
 #include "TF1.h"
 #include "TH1.h"
 #include "TTree.h"
-#include <TAxis.h>
-#include <TCanvas.h>
-#include <TFile.h>
-#include <THnSparse.h>
-#include <TLegend.h>
-#include <TMath.h>
-#include <iostream>
 
 using namespace std;
 
@@ -27,24 +27,21 @@ void FileExists_warn(const string &filename) {
   }
 }
 
-unique_ptr<TFile> GetROOT(const string Readpath, const string ReadFilename,
-                          const string Option) {
+unique_ptr<TFile> GetROOT(const string Readpath, const string ReadFilename, const string Option) {
   string lowerOption = Option;
-  transform(lowerOption.begin(), lowerOption.end(), lowerOption.begin(),
-            [](unsigned char c) { return tolower(c); }); // 全转小写
-  if (!(lowerOption == "read" || lowerOption == "write" ||
-        lowerOption == "recreate")) {
-    cout << "Invalid Option: " << Option
-         << ", should be one of: read, write, recreate" << endl;
+  transform(lowerOption.begin(), lowerOption.end(), lowerOption.begin(), [](unsigned char c) {
+    return tolower(c);
+  });  // 全转小写
+  if (!(lowerOption == "read" || lowerOption == "write" || lowerOption == "recreate")) {
+    cout << "Invalid Option: " << Option << ", should be one of: read, write, recreate" << endl;
   }
-  string rfilename = Readpath + "/" + ReadFilename + ".root"; // 加上root后缀
+  string rfilename = Readpath + "/" + ReadFilename + ".root";  // 加上root后缀
   FileExists_warn(rfilename);
 
   return make_unique<TFile>(rfilename.c_str(), Option.c_str());
 }
 
-void onefromndHisto(string rpath, string rfilename, string wpath,
-                    string wfilename) {
+void onefromndHisto(string rpath, string rfilename, string wpath, string wfilename) {
   // string fullpath = filepath + "/" +filename;
   auto rfFemtoep = GetROOT(rpath, rfilename, "read");
   auto wfFemtoep = GetROOT(wpath, wfilename, "recreate");

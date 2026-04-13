@@ -1,3 +1,10 @@
+#include <TAxis.h>
+#include <TCanvas.h>
+#include <TFile.h>
+#include <THnSparse.h>
+#include <TLegend.h>
+#include <TMath.h>
+
 #include <algorithm>
 #include <fstream>
 #include <iomanip>
@@ -11,12 +18,6 @@
 #include "TF1.h"
 #include "TH1.h"
 #include "TTree.h"
-#include <TAxis.h>
-#include <TCanvas.h>
-#include <TFile.h>
-#include <THnSparse.h>
-#include <TLegend.h>
-#include <TMath.h>
 
 using namespace std;
 
@@ -31,23 +32,22 @@ void FileExists_warn(const string &filename) {
   }
 }
 
-TFile *GetROOT(const string Readpath, const string ReadFilename,
-               const string Option) {
+TFile *GetROOT(const string Readpath, const string ReadFilename, const string Option) {
   string lowerOption = Option;
-  transform(lowerOption.begin(), lowerOption.end(), lowerOption.begin(),
-            [](unsigned char c) { return tolower(c); }); // 全转小写
-  if (!(lowerOption == "read" || lowerOption == "write" ||
-        lowerOption == "recreate")) {
-    cout << "Invalid Option: " << Option
-         << ", should be one of: read, write, recreate" << endl;
+  transform(lowerOption.begin(), lowerOption.end(), lowerOption.begin(), [](unsigned char c) {
+    return tolower(c);
+  });  // 全转小写
+  if (!(lowerOption == "read" || lowerOption == "write" || lowerOption == "recreate")) {
+    cout << "Invalid Option: " << Option << ", should be one of: read, write, recreate" << endl;
   }
-  string rfilename = Readpath + "/" + ReadFilename + ".root"; // 加上root后缀
+  string rfilename = Readpath + "/" + ReadFilename + ".root";  // 加上root后缀
   FileExists_warn(rfilename);
 
   return new TFile(rfilename.c_str(), Option.c_str());
 }
 
-TH1D *calc_cf_from_sme_rerange(TH1D *h_se, TH1D *h_me,
+TH1D *calc_cf_from_sme_rerange(TH1D *h_se,
+                               TH1D *h_me,
                                std::pair<double, double> normrange,
                                std::pair<double, double> kstarRange) {
   TF1 *constant = new TF1("constant", "1", 0, 10);
@@ -61,8 +61,7 @@ TH1D *calc_cf_from_sme_rerange(TH1D *h_se, TH1D *h_me,
   int binNorm[2];
   binNorm[0] = h_se_c->FindBin(normrange.first);
   binNorm[1] = h_se_c->FindBin(normrange.second);
-  double factorN = h_me_c->Integral(binNorm[0], binNorm[1]) /
-                   h_se_c->Integral(binNorm[0], binNorm[1]);
+  double factorN = h_me_c->Integral(binNorm[0], binNorm[1]) / h_se_c->Integral(binNorm[0], binNorm[1]);
   h_me_c->Divide(constant, factorN);
   h_se_c->Divide(h_me_c);
 
@@ -76,7 +75,7 @@ TH1D *calc_cf_from_sme_rerange(TH1D *h_se, TH1D *h_me,
   for (int i = binRange[0]; i <= binRange[1]; i++) {
     double content = h_se_c->GetBinContent(i);
     double error = h_se_c->GetBinError(i);
-    int newBin = i - binRange[0] + 1; // 从1开始填
+    int newBin = i - binRange[0] + 1;  // 从1开始填
     h_cf_re->SetBinContent(newBin, content);
     h_cf_re->SetBinError(newBin, error);
   }
@@ -84,7 +83,6 @@ TH1D *calc_cf_from_sme_rerange(TH1D *h_se, TH1D *h_me,
 }
 
 TH1D *TH1D_rebin(TH1D *h, int rebinFactor = 2) {
-
   int nBins = h->GetNbinsX();
   int nBinsRebinned = nBins / rebinFactor;
 
@@ -146,16 +144,14 @@ void TH1_rebin() {
 
   auto wf = GetROOT(wpath, wfilename, "recreate");
   if (!wf || wf->IsZombie()) {
-    cout << "Error creating file: " << wpath + "/" + wfilename + ".root"
-         << endl;
+    cout << "Error creating file: " << wpath + "/" + wfilename + ".root" << endl;
     rf->Close();
     return;
   }
 
   TH1D *hs = (TH1D *)rf->Get(rtaskname1.c_str());
   if (!hs) {
-    cout << "Error: Histogram " << rtaskname1 << " not found in file "
-         << rfilename << endl;
+    cout << "Error: Histogram " << rtaskname1 << " not found in file " << rfilename << endl;
     rf->Close();
     return;
   }
@@ -172,8 +168,7 @@ void TH1_rebin() {
 
   TH1D *hm = (TH1D *)rf->Get(rtaskname2.c_str());
   if (!hm) {
-    cout << "Error: Histogram " << rtaskname2 << " not found in file "
-         << rfilename << endl;
+    cout << "Error: Histogram " << rtaskname2 << " not found in file " << rfilename << endl;
     rf->Close();
     return;
   }
@@ -188,8 +183,7 @@ void TH1_rebin() {
   }
   wf->WriteObject(hm_rebinned, "rebinned_mixed");
 
-  auto *hcf_rebinned = calc_cf_from_sme_rerange(hs_rebinned, hm_rebinned,
-                                                {0.5, 0.8}, {0., 0.25});
+  auto *hcf_rebinned = calc_cf_from_sme_rerange(hs_rebinned, hm_rebinned, {0.5, 0.8}, {0., 0.25});
   hcf_rebinned->Sumw2();
   // hcf_rebinned->Draw();
 
